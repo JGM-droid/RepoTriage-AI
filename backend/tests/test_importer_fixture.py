@@ -7,6 +7,8 @@ import json
 import os
 import socket
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine, select, text
@@ -132,7 +134,7 @@ def test_load_fixture_rejects_malformed_json(tmp_path: Path) -> None:
 
 
 def test_import_fixture_performs_no_network_call(
-    tmp_path: Path, database_session: Session, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixture_dir = _write_fixture(tmp_path, [_record(1), _record(2)])
 
@@ -141,9 +143,25 @@ def test_import_fixture_performs_no_network_call(
 
     monkeypatch.setattr(socket.socket, "connect", _blocked)
 
-    summary = import_fixture(database_session, fixture_dir=fixture_dir)
+    session = MagicMock()
+    repository_row = SimpleNamespace(id="repo-id")
+    repository_select_result = MagicMock()
+    repository_select_result.scalar_one.return_value = repository_row
+    issue_insert_result = MagicMock()
+    issue_insert_result.first.return_value = ("issue-id",)
+    # Execute call order: repository upsert, repository select, then one
+    # insert per issue record (two records in this fixture).
+    session.execute.side_effect = [
+        MagicMock(),
+        repository_select_result,
+        issue_insert_result,
+        issue_insert_result,
+    ]
+
+    summary = import_fixture(session, fixture_dir=fixture_dir)
 
     assert summary.inserted == 2
+    session.commit.assert_called_once()
 
 
 def test_committed_fixture_imports_successfully_into_postgresql(

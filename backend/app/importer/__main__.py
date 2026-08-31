@@ -22,6 +22,11 @@ def main() -> int:
     except ImporterError as exc:
         print(f"Import failed: {exc}", file=sys.stderr)
         return 1
+    except Exception:
+        # Never report a database or other unexpected failure as a skip or
+        # success, and never expose connection details to the operator.
+        print("Import failed: an unexpected error occurred.", file=sys.stderr)
+        return 1
     finally:
         session.close()
 
