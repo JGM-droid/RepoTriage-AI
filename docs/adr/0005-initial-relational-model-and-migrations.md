@@ -33,6 +33,16 @@ Repository scope must be carried through future data access. Imported issue cont
 
 Prove migrations upgrade and downgrade, foreign-key and uniqueness constraints reject invalid data, and the ER diagram matches the migration.
 
+```mermaid
+erDiagram
+	REPOSITORIES ||--o{ ISSUES : owns
+	ISSUES ||--o{ ANALYSES : has
+	ANALYSES ||--o{ RECOMMENDATIONS : produces
+	RECOMMENDATIONS ||--o{ HUMAN_DECISIONS : receives
+	REPOSITORIES ||--o{ AUDIT_EVENTS : scopes
+	ISSUES o|--o{ AUDIT_EVENTS : references
+```
+
 ## Revisit conditions
 
 Revisit when organization/user management, authentication/RBAC, or cross-tenant enforcement is implemented.

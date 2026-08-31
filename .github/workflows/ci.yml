@@ -42,6 +42,11 @@ jobs:
         run: |
           ruff format --check backend
           ruff check backend
+      - name: Apply database migrations
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+psycopg://repotriage:repotriage@localhost:5432/repotriage
+        run: alembic upgrade head
       - name: Test backend
         env:
           DATABASE_URL: postgresql+psycopg://repotriage:repotriage@localhost:5432/repotriage
