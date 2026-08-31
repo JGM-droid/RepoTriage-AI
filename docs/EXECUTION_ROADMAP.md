@@ -162,6 +162,8 @@ Learning checkpoint:
 
 ### Milestone 0.2 — Runnable skeleton
 
+**Status:** Complete — approved after successful GitHub Actions verification for commit `dbca8ba`.
+
 Deliverables:
 
 - React/TypeScript frontend
@@ -454,10 +456,10 @@ At the end of every work session, update the Current Project State below. Do not
 ## 11. Current Project State
 
 **Current release:** Release 0 — Foundation and repository bootstrap
-**Current milestone:** Milestone 0.2 — Runnable skeleton
-**Status:** Milestone 0.1 project controls are complete; Milestone 0.2 runnable-skeleton implementation is in progress.
+**Current milestone:** Release 1, Milestone 1.1 — Core data model
+**Status:** Milestone 0.1 project controls and Milestone 0.2 runnable skeleton are complete; Release 1 implementation has not started.
 **Last approved decision:** Adopt governed, evidence-backed GitHub issue triage as the verified business case while retaining the approved portfolio rubric.
-**Next action:** Implement and verify the Milestone 0.2 runnable skeleton.
+**Next action:** Plan Release 1, Milestone 1.1 — Core data model.
 **Blockers:** None identified.
 
 **Ownership follow-up:** Review remaining technical ownership topics when their corresponding components are implemented.
