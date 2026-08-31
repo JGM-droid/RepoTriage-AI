@@ -1,0 +1,54 @@
+:root {
+  color: #1d2a32;
+  background: #f4f7f5;
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  box-sizing: border-box;
+  max-width: 720px;
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 96px 24px;
+}
+
+h1 {
+  margin: 0;
+  color: #164b55;
+  font-size: 3rem;
+}
+
+.eyebrow {
+  margin: 0 0 12px;
+  color: #7a3e1d;
+  font-family: "Trebuchet MS", sans-serif;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.subtitle,
+.foundation {
+  font-size: 1.1rem;
+  line-height: 1.6;
+}
+
+section {
+  margin-top: 36px;
+  border-left: 4px solid #2a7d6d;
+  padding-left: 18px;
+}
+
+button {
+  border: 1px solid #164b55;
+  border-radius: 4px;
+  background: #164b55;
+  color: #fff;
+  cursor: pointer;
+  padding: 8px 14px;
+}

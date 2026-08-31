@@ -455,9 +455,9 @@ At the end of every work session, update the Current Project State below. Do not
 
 **Current release:** Release 0 — Foundation and repository bootstrap
 **Current milestone:** Milestone 0.2 — Runnable skeleton
-**Status:** Milestone 0.1 project controls are complete; Milestone 0.2 planning has not started.
+**Status:** Milestone 0.1 project controls are complete; Milestone 0.2 runnable-skeleton implementation is in progress.
 **Last approved decision:** Adopt governed, evidence-backed GitHub issue triage as the verified business case while retaining the approved portfolio rubric.
-**Next action:** Plan Milestone 0.2 — Runnable skeleton.
+**Next action:** Implement and verify the Milestone 0.2 runnable skeleton.
 **Blockers:** None identified.
 
 **Ownership follow-up:** Review remaining technical ownership topics when their corresponding components are implemented.

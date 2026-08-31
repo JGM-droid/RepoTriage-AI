@@ -6,7 +6,41 @@ RepoTriage AI addresses the repeated triage burden created by duplicate, incompl
 
 The planned workflow is `import → classify → retrieve evidence → assess → propose → human review → decision`. Planned capabilities include evidence-backed recommendations, human approval, provider-neutral AI routing, repository-grounded retrieval, evaluation, security guardrails, auditability, observability, and reproducible delivery.
 
-**Current status:** Release 0 — Foundation and repository bootstrap / Milestone 0.1 — Project controls. Application code has not started.
+**Current status:** Release 0 — Foundation and repository bootstrap / Milestone 0.2 — Runnable skeleton in progress. This foundation provides only frontend-to-health-check and PostgreSQL-readiness connectivity; issue triage and AI functionality have not started.
+
+## Local Setup
+
+Use Windows PowerShell from the repository root.
+
+```powershell
+Copy-Item .env.example .env
+py -3.12 -m venv backend/.venv
+& .\backend\.venv\Scripts\python.exe -m pip install -e "backend[dev]"
+Set-Location frontend
+npm ci
+Set-Location ..
+```
+
+Run local checks:
+
+```powershell
+& .\backend\.venv\Scripts\python.exe -m ruff format --check backend
+& .\backend\.venv\Scripts\python.exe -m ruff check backend
+& .\backend\.venv\Scripts\python.exe -m pytest backend/tests
+Set-Location frontend; npm run lint; npm test; npm run build; Set-Location ..
+```
+
+Validate and run the container stack:
+
+```powershell
+docker compose config
+docker compose up --build -d
+Invoke-WebRequest http://localhost:8000/api/v1/health
+Invoke-WebRequest http://localhost:8000/api/v1/readiness
+docker compose down
+```
+
+The frontend is available at `http://localhost:5173`. The Compose stack uses frontend port 5173, API port 8000, and PostgreSQL internally; it does not publish PostgreSQL.
 
 ## Project Controls
 
