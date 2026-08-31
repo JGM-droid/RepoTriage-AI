@@ -42,6 +42,16 @@ docker compose down
 
 The frontend is available at `http://localhost:5173`. The Compose stack uses frontend port 5173, API port 8000, and PostgreSQL internally; it does not publish PostgreSQL.
 
+## Offline Issue Import (Milestone 1.2)
+
+Import the committed, cached fixture of exactly 100 sanitized `pallets/flask` issues into the running PostgreSQL database. This is the default demo/import path and performs no network call:
+
+```powershell
+& .\backend\.venv\Scripts\python.exe -m app.importer
+```
+
+Running the command twice is idempotent: the second run reports `0 new issue(s)` because the existing `repositories.source_url` and `(issues.repository_id, issues.external_number)` constraints make repeat imports safe. The fixture and its provenance manifest live at `backend/fixtures/pallets_flask/`; see [ADR 0006](docs/adr/0006-bounded-issue-importer-design.md) for the import boundary, bounds, and sanitization policy.
+
 ## Project Controls
 
 - [Portfolio rubric](docs/PORTFOLIO_RUBRIC.md)
@@ -55,6 +65,7 @@ The frontend is available at `http://localhost:5173`. The Compose stack uses fro
 - [ADR 0002: Public fixture-data policy](docs/adr/0002-public-fixture-data-policy.md)
 - [ADR 0003: Mandatory human-review boundary](docs/adr/0003-mandatory-human-review-boundary.md)
 - [ADR 0004: Deferred async workflow technology selection](docs/adr/0004-defer-async-workflow-technology-selection.md)
+- [ADR 0006: Bounded issue importer design](docs/adr/0006-bounded-issue-importer-design.md)
 - [Agent instructions](AGENTS.md)
 
 ## Claim Boundary
