@@ -456,10 +456,10 @@ At the end of every work session, update the Current Project State below. Do not
 ## 11. Current Project State
 
 **Current release:** Release 1 — Product foundation
-**Current milestone:** Milestone 1.1 — Core data model
-**Status:** Milestone 0.1 project controls and Milestone 0.2 runnable skeleton are complete; Release 1 implementation is in progress, with Milestone 1.1 under verification.
+**Current milestone:** Milestone 1.2 — Bounded issue importer
+**Status:** Milestone 0.1 project controls, Milestone 0.2 runnable skeleton, and Milestone 1.1 core data model are complete; Release 1 implementation is in progress.
 **Last approved decision:** Adopt governed, evidence-backed GitHub issue triage as the verified business case while retaining the approved portfolio rubric.
-**Next action:** Verify Release 1, Milestone 1.1 — Core data model.
+**Next action:** Plan Release 1, Milestone 1.2 — Bounded issue importer.
 **Blockers:** None identified.
 
 **Ownership follow-up:** Review remaining technical ownership topics when their corresponding components are implemented.
