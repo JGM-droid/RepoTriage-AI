@@ -1,0 +1,40 @@
+# Editor/tool state
+code/prototype_v1/results/active_editor_state.json
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.venv/
+venv/
+env/
+
+# Node.js
+node_modules/
+dist/
+build/
+.next/
+.vite/
+*.tsbuildinfo
+
+# Test and coverage caches
+.cache/
+coverage/
+
+# IDE and operating-system files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
