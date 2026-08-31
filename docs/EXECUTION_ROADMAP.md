@@ -455,8 +455,8 @@ At the end of every work session, update the Current Project State below. Do not
 
 ## 11. Current Project State
 
-**Current release:** Release 0 — Foundation and repository bootstrap
-**Current milestone:** Release 1, Milestone 1.1 — Core data model
+**Current release:** Release 1 — Product foundation
+**Current milestone:** Milestone 1.1 — Core data model
 **Status:** Milestone 0.1 project controls and Milestone 0.2 runnable skeleton are complete; Release 1 implementation has not started.
 **Last approved decision:** Adopt governed, evidence-backed GitHub issue triage as the verified business case while retaining the approved portfolio rubric.
 **Next action:** Plan Release 1, Milestone 1.1 — Core data model.
