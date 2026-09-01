@@ -1,0 +1,11 @@
+{
+  "captured_at": "2026-08-31T23:50:00Z",
+  "content_checksum": "4c70b73ba050d9c84e5e9ec362506c30f210d5e4bb0ebba5f2e2fcd9b41b00ec",
+  "content_checksum_algorithm": "sha256",
+  "fixture_format_version": "1.0",
+  "issue_count": 100,
+  "repository_source_url": "https://github.com/pallets/flask",
+  "selection_rules": "GitHub issues for pallets/flask, all states, pull requests excluded, capped at 3 API pages of up to 100 items each and 100 total issues, sorted ascending by external issue number.",
+  "source_provider": "github",
+  "source_repository": "pallets/flask"
+}

@@ -62,6 +62,8 @@ jobs:
           npm run build
       - name: Scan for secrets
         uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Validate Compose configuration
         run: |
           cp .env.example .env
