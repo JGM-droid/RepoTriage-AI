@@ -103,6 +103,18 @@ def test_load_fixture_accepts_a_small_valid_fixture(tmp_path: Path) -> None:
     assert len(records) == 2
 
 
+def test_load_fixture_accepts_platform_line_ending_conversion(tmp_path: Path) -> None:
+    fixture_dir = _write_fixture(tmp_path, [_record(1), _record(2)])
+    issues_path = fixture_dir / "issues.json"
+    issues_text = issues_path.read_text(encoding="utf-8")
+    issues_path.write_bytes(issues_text.replace("\n", "\r\n").encode("utf-8"))
+
+    manifest, records = load_fixture(fixture_dir)
+
+    assert manifest["issue_count"] == 2
+    assert len(records) == 2
+
+
 def test_load_fixture_rejects_a_tampered_checksum(tmp_path: Path) -> None:
     fixture_dir = _write_fixture(tmp_path, [_record(1)])
     issues_path = fixture_dir / "issues.json"

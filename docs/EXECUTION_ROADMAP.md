@@ -457,9 +457,9 @@ At the end of every work session, update the Current Project State below. Do not
 
 **Current release:** Release 1 — Product foundation
 **Current milestone:** Milestone 1.3 — Issue browsing experience
-**Status:** Milestone 0.1 project controls, Milestone 0.2 runnable skeleton, Milestone 1.1 core data model, and Milestone 1.2 bounded issue importer are complete. Milestone 1.3 implementation has not started.
+**Status:** Milestone 0.1 project controls, Milestone 0.2 runnable skeleton, Milestone 1.1 core data model, and Milestone 1.2 bounded issue importer are complete. Milestone 1.3 is in progress: issue list/detail API contracts, React browsing states, focused tests, and PostgreSQL-backed backend verification have been added, but the milestone is not complete until visible demo evidence and Jesse's ownership checkpoint are complete.
 **Last approved decision:** Adopt governed, evidence-backed GitHub issue triage as the verified business case while retaining the approved portfolio rubric.
-**Next action:** Plan Release 1, Milestone 1.3 — Issue browsing experience.
+**Next action:** Capture visible issue-browsing evidence and complete Jesse's ownership checkpoint before marking R1-03 complete.
 **Blockers:** None identified.
 
 **Ownership follow-up:** Review remaining technical ownership topics when their corresponding components are implemented.

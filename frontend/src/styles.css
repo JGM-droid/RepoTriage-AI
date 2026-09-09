@@ -10,10 +10,10 @@ body {
 
 main {
   box-sizing: border-box;
-  max-width: 720px;
+  max-width: 1120px;
   min-height: 100vh;
   margin: 0 auto;
-  padding: 96px 24px;
+  padding: 64px 24px;
 }
 
 h1 {
@@ -51,4 +51,122 @@ button {
   color: #fff;
   cursor: pointer;
   padding: 8px 14px;
+}
+
+a {
+  color: #164b55;
+  overflow-wrap: anywhere;
+}
+
+.section-heading,
+.issue-layout,
+dl div {
+  display: grid;
+  gap: 16px;
+}
+
+.section-heading {
+  align-items: start;
+  grid-template-columns: 1fr auto;
+}
+
+.section-heading h2 {
+  margin: 0;
+  color: #164b55;
+}
+
+.issue-layout {
+  grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr);
+  margin-top: 24px;
+}
+
+.issue-list {
+  display: grid;
+  gap: 10px;
+  max-height: 680px;
+  margin: 0;
+  overflow: auto;
+  padding: 0;
+}
+
+.issue-list li {
+  list-style: none;
+}
+
+.issue-card {
+  display: grid;
+  width: 100%;
+  gap: 6px;
+  border-color: #d0d9d5;
+  background: #fff;
+  color: #1d2a32;
+  text-align: left;
+}
+
+.issue-card.selected,
+.issue-card:hover {
+  border-color: #2a7d6d;
+  box-shadow: inset 4px 0 0 #2a7d6d;
+}
+
+.issue-number,
+.issue-meta,
+dt {
+  color: #7a3e1d;
+  font-family: "Trebuchet MS", sans-serif;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.issue-title {
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.issue-detail {
+  min-height: 420px;
+  margin-top: 0;
+  background: #fff;
+  border-left-color: #7a3e1d;
+  padding: 18px;
+}
+
+.issue-detail h3,
+.issue-detail h4 {
+  margin: 0 0 12px;
+  color: #164b55;
+}
+
+dl {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0;
+}
+
+dl div {
+  grid-template-columns: 140px minmax(0, 1fr);
+}
+
+dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.issue-body {
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 760px) {
+  h1 {
+    font-size: 2.25rem;
+  }
+
+  .section-heading,
+  .issue-layout,
+  dl div {
+    grid-template-columns: 1fr;
+  }
 }

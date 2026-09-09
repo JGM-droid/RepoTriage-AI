@@ -29,6 +29,36 @@ class IssueRecord(BaseModel):
     updated_at: datetime
 
 
+class IssueRepositorySummary(BaseModel):
+    id: UUID
+    name: str
+    source_url: str
+
+
+class IssueListItem(BaseModel):
+    id: UUID
+    external_number: int
+    title: str
+    state: str
+    source_url: str
+    created_at: datetime
+    updated_at: datetime
+    repository: IssueRepositorySummary
+
+
+class IssueDetail(IssueListItem):
+    body: str
+
+
+class IssueListResponse(BaseModel):
+    issues: list[IssueListItem]
+
+
+class ErrorResponse(BaseModel):
+    error: str
+    message: str
+
+
 class AnalysisRecord(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

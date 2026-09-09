@@ -159,11 +159,13 @@ def load_fixture(fixture_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         issues_bytes = issues_path.read_bytes()
-        raw_records = json.loads(issues_bytes.decode("utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        issues_text = issues_bytes.decode("utf-8")
+        raw_records = json.loads(issues_text)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ImportValidationError("fixture files are missing or not valid JSON") from exc
 
-    actual_checksum = hashlib.sha256(issues_bytes).hexdigest()
+    canonical_issues_bytes = issues_text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+    actual_checksum = hashlib.sha256(canonical_issues_bytes).hexdigest()
     if manifest.get("content_checksum") != actual_checksum:
         raise ImportIntegrityError("fixture content checksum does not match its manifest")
 
