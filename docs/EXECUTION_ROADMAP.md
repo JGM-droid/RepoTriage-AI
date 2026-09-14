@@ -455,11 +455,11 @@ At the end of every work session, update the Current Project State below. Do not
 
 ## 11. Current Project State
 
-**Current release:** Release 1 — Product foundation
-**Current milestone:** Milestone 1.6 — Release 1 verification
-**Status:** Milestone 0.1 project controls, Milestone 0.2 runnable skeleton, Milestone 1.1 core data model, Milestone 1.2 bounded issue importer, Milestone 1.3 issue browsing experience, Milestone 1.4 deterministic triage workflow, and Milestone 1.5 human decision gate are complete. Milestone 1.5 verified evidence: commit `92663e5` is on `main`, pushed to `origin/main`, with GitHub Actions passing; full backend suite against an isolated migrated PostgreSQL database (103 passed); focused decision/triage backend tests (37 passed); frontend lint and build passed with 13 frontend tests passed; a visible browser demo proved a deterministic recommendation initially remained unapproved, displayed Approve/Reject/Request revision controls, and changed only after Jesse explicitly clicked Approve. Jesse completed the ownership checkpoint and approved the milestone. Milestone 1.6 (Release 1 verification) has not been started.
+**Current release:** Release 2 — AI architecture
+**Current milestone:** Milestone 2.1 — Durable asynchronous workflow
+**Status:** Release 1 — Product foundation is complete: Milestone 0.1 project controls, Milestone 0.2 runnable skeleton, Milestone 1.1 core data model, Milestone 1.2 bounded issue importer, Milestone 1.3 issue browsing experience, Milestone 1.4 deterministic triage workflow, Milestone 1.5 human decision gate, and Milestone 1.6 Release 1 verification are all complete. Milestone 1.6 verified evidence: the automated Release 1 acceptance test and the complete backend suite passed (104 passed, 0 failed, 0 skipped) against an isolated PostgreSQL test database; ruff formatting/lint, Compose configuration, and `git diff --check` passed; the demo database remained exactly 100 fixture issues throughout; a fresh isolated-database run completed import → browse → deterministic triage → review → explicit human decision; commit `4d41f8a` passed GitHub Actions; the visible browser workflow was demonstrated. Jesse explicitly approved Milestone 1.6 and Release 1 as complete. Milestone 2.1 (durable asynchronous workflow) has not been started.
 **Last approved decision:** Adopt governed, evidence-backed GitHub issue triage as the verified business case while retaining the approved portfolio rubric.
-**Next action:** Begin Milestone 1.6 Release 1 verification (fresh local run of import → browse → analyze → review → decision, basic CI and documented acceptance test, captured Release 1 rubric evidence, and Jesse's Release 1 ownership review).
+**Next action:** Begin Milestone 2.1 durable asynchronous workflow (stage boundaries and persisted status, retry/timeout policy, idempotency keys, recoverable/resumable failures, forced-failure tests), selecting an async workflow technology per ADR 0004's revisit conditions.
 **Blockers:** None identified.
 
 **Ownership follow-up:** Review remaining technical ownership topics when their corresponding components are implemented.

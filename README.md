@@ -6,7 +6,7 @@ RepoTriage AI addresses the repeated triage burden created by duplicate, incompl
 
 The planned workflow is `import → classify → retrieve evidence → assess → propose → human review → decision`. Planned capabilities include evidence-backed recommendations, human approval, provider-neutral AI routing, repository-grounded retrieval, evaluation, security guardrails, auditability, observability, and reproducible delivery.
 
-**Current status:** Release 0 — Foundation and repository bootstrap / Milestone 0.2 — Runnable skeleton in progress. This foundation provides only frontend-to-health-check and PostgreSQL-readiness connectivity; issue triage and AI functionality have not started.
+**Current status:** Release 1 — Product foundation / Milestone 1.6 — Release 1 verification in progress. Import, issue browsing, deterministic triage (classify → retrieve fixture evidence → assess → propose → human review), and an explicit human approve/reject/request-revision decision are implemented; none of it requires a paid AI provider.
 
 ## Local Setup
 
@@ -51,6 +51,17 @@ Import the committed, cached fixture of exactly 100 sanitized `pallets/flask` is
 ```
 
 Running the command twice is idempotent: the second run reports `0 new issue(s)` because the existing `repositories.source_url` and `(issues.repository_id, issues.external_number)` constraints make repeat imports safe. The fixture and its provenance manifest live at `backend/fixtures/pallets_flask/`; see [ADR 0006](docs/adr/0006-bounded-issue-importer-design.md) for the import boundary, bounds, and sanitization policy.
+
+## Release 1 Acceptance Test (Milestone 1.6)
+
+`backend/tests/test_release1_acceptance.py` is the automated, documented acceptance test for the Release 1 exit gate: a fresh local run that completes `import → browse → analyze → review → decision` end to end using only deterministic, offline logic and no paid AI provider. It runs as part of the normal backend test suite against a migrated PostgreSQL database:
+
+```powershell
+$env:DATABASE_URL = "postgresql+psycopg://repotriage:repotriage@localhost:5432/repotriage"
+& .\backend\.venv\Scripts\python.exe -m pytest backend/tests/test_release1_acceptance.py
+```
+
+To walk through the same acceptance path manually in the browser: run `docker compose up --build -d`, open `http://localhost:5173`, confirm the health banner is healthy, run `python -m app.importer` once for the running stack, browse the issue list and open an issue, click **Run deterministic triage**, review the separated Evidence/System inference/Proposed action sections, then click **Approve**, **Reject**, or **Request revision** and confirm the recorded decision is displayed and the controls disappear.
 
 ## Project Controls
 
