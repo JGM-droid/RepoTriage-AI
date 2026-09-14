@@ -1,4 +1,10 @@
-import type { IssueDetail, IssueListResponse, ServiceStatus, TriageResult } from "./contracts";
+import type {
+  IssueDetail,
+  IssueListResponse,
+  ServiceStatus,
+  TriageDecision,
+  TriageResult,
+} from "./contracts";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -50,6 +56,21 @@ export async function startTriage(issueId: string): Promise<TriageResult> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
+    },
+  );
+}
+
+export async function submitTriageDecision(
+  issueId: string,
+  decision: TriageDecision,
+): Promise<TriageResult> {
+  return fetchJson<TriageResult>(
+    `/api/v1/issues/${issueId}/triage/decision`,
+    "The human decision could not be recorded.",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision }),
     },
   );
 }

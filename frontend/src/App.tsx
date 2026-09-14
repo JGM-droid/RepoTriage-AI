@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 
-import { ApiError, getHealth, getIssue, getIssues, getTriageResult, startTriage } from "./api/client";
+import { ApiError, getHealth, getIssue, getIssues, getTriageResult, startTriage, submitTriageDecision } from "./api/client";
 import type {
   IssueDetail,
   IssueListItem,
   ServiceStatus as ServiceStatusContract,
+  TriageDecision,
   TriageResult,
 } from "./api/contracts";
 import { IssueTriage } from "./components/IssueTriage";
@@ -26,6 +27,8 @@ export default function App() {
   const [triageHasRun, setTriageHasRun] = useState(false);
   const [triageRunning, setTriageRunning] = useState(false);
   const [triageError, setTriageError] = useState(false);
+  const [decisionSubmitting, setDecisionSubmitting] = useState(false);
+  const [decisionError, setDecisionError] = useState(false);
 
   async function loadHealth() {
     setIsLoading(true);
@@ -63,6 +66,8 @@ export default function App() {
     setTriageHasRun(false);
     setTriageRunning(false);
     setTriageError(false);
+    setDecisionSubmitting(false);
+    setDecisionError(false);
   }
 
   async function openIssue(issueId: string) {
@@ -108,6 +113,21 @@ export default function App() {
       setTriageError(true);
     } finally {
       setTriageRunning(false);
+    }
+  }
+
+  async function decideTriage(decision: TriageDecision) {
+    if (!selectedIssueId) {
+      return;
+    }
+    setDecisionSubmitting(true);
+    setDecisionError(false);
+    try {
+      setTriageResult(await submitTriageDecision(selectedIssueId, decision));
+    } catch {
+      setDecisionError(true);
+    } finally {
+      setDecisionSubmitting(false);
     }
   }
 
@@ -211,6 +231,9 @@ export default function App() {
           error={triageError}
           hasRun={triageHasRun}
           onRunTriage={() => void runTriage()}
+          onDecide={(decision) => void decideTriage(decision)}
+          decisionSubmitting={decisionSubmitting}
+          decisionError={decisionError}
         />
       ) : null}
     </main>

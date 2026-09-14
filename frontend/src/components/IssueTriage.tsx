@@ -1,4 +1,4 @@
-import type { TriageResult } from "../api/contracts";
+import type { TriageDecision, TriageResult } from "../api/contracts";
 
 type IssueTriageProps = {
   result: TriageResult | null;
@@ -6,9 +6,27 @@ type IssueTriageProps = {
   error: boolean;
   hasRun: boolean;
   onRunTriage: () => void;
+  onDecide: (decision: TriageDecision) => void;
+  decisionSubmitting: boolean;
+  decisionError: boolean;
 };
 
-export function IssueTriage({ result, isRunning, error, hasRun, onRunTriage }: IssueTriageProps) {
+const DECISION_LABELS: Record<TriageDecision, string> = {
+  approve: "Approve",
+  reject: "Reject",
+  request_revision: "Request revision",
+};
+
+export function IssueTriage({
+  result,
+  isRunning,
+  error,
+  hasRun,
+  onRunTriage,
+  onDecide,
+  decisionSubmitting,
+  decisionError,
+}: IssueTriageProps) {
   return (
     <section aria-labelledby="issue-triage-title" className="issue-triage">
       <div className="section-heading">
@@ -64,12 +82,49 @@ export function IssueTriage({ result, isRunning, error, hasRun, onRunTriage }: I
           <div>
             <h4>Human review status</h4>
             <p>
-              {result.human_review?.human_review_status === "awaiting_human_review"
-                ? "Awaiting human review"
-                : result.human_review?.human_review_status}
-              {" "}(recommendation: {result.human_review?.recommendation_status};{" "}
-              decision: {result.human_review?.decision ?? "none recorded"})
+              This is a rule-based recommendation only; it has no effect until a human
+              reviewer records an explicit decision below.
             </p>
+
+            {result.human_review?.recommendation_status === "proposed" ? (
+              <div className="decision-controls" role="group" aria-label="Record human decision">
+                <button
+                  type="button"
+                  onClick={() => onDecide("approve")}
+                  disabled={decisionSubmitting}
+                >
+                  {decisionSubmitting ? "Submitting..." : "Approve"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDecide("reject")}
+                  disabled={decisionSubmitting}
+                >
+                  {decisionSubmitting ? "Submitting..." : "Reject"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDecide("request_revision")}
+                  disabled={decisionSubmitting}
+                >
+                  {decisionSubmitting ? "Submitting..." : "Request revision"}
+                </button>
+              </div>
+            ) : null}
+
+            {decisionError ? (
+              <p role="alert">The human decision could not be recorded.</p>
+            ) : null}
+
+            {result.human_review?.decision ? (
+              <p role="status">
+                Recorded decision: {DECISION_LABELS[result.human_review.decision]}
+                {result.human_review.decided_by ? ` by reviewer ${result.human_review.decided_by}` : ""}
+                {result.human_review.decided_at
+                  ? ` at ${new Date(result.human_review.decided_at).toLocaleString()}`
+                  : ""}
+              </p>
+            ) : null}
           </div>
         </div>
       ) : null}

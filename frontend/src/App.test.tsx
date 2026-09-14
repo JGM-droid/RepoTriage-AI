@@ -38,7 +38,14 @@ const completedTriageResponse = {
   evidence: [{ field: "title", excerpt: "CLI crashes on Windows", source_url: "https://github.com/pallets/flask/issues/101" }],
   assessment: { severity: "high", rationale: "Matched rule 'crash-keyword'." },
   proposed_action: { action: "Prioritize for immediate triage.", rationale: "Derived from classification." },
-  human_review: { recommendation_status: "proposed", human_review_status: "awaiting_human_review", decision: null },
+  human_review: {
+    recommendation_status: "proposed",
+    human_review_status: "awaiting_human_review",
+    decision: null,
+    decided_by: null,
+    decided_at: null,
+    rationale: null,
+  },
   status_history: [
     { status: "queued", created_at: "2026-09-14T12:00:00Z" },
     { status: "running", created_at: "2026-09-14T12:00:01Z" },
@@ -46,6 +53,17 @@ const completedTriageResponse = {
   ],
   created_at: "2026-09-14T12:00:00Z",
   updated_at: "2026-09-14T12:00:00Z",
+};
+const approvedTriageResponse = {
+  ...completedTriageResponse,
+  human_review: {
+    recommendation_status: "approved",
+    human_review_status: "decided",
+    decision: "approve",
+    decided_by: "00000000-0000-0000-0000-000000000001",
+    decided_at: "2026-09-14T12:05:00Z",
+    rationale: null,
+  },
 };
 const failedTriageResponse = {
   analysis_id: "analysis-2",
@@ -206,8 +224,49 @@ describe("App", () => {
     expect(screen.getByText("Evidence")).toBeInTheDocument();
     expect(screen.getByText("System inference")).toBeInTheDocument();
     expect(screen.getByText("Proposed action")).toBeInTheDocument();
-    expect(screen.getByText(/Awaiting human review/)).toBeInTheDocument();
-    expect(screen.getByText(/recommendation: proposed/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Request revision" })).toBeInTheDocument();
+  });
+
+  it("submits a human decision and shows the recorded outcome", async () => {
+    vi.mocked(fetch)
+      .mockReturnValueOnce(jsonResponse(healthResponse))
+      .mockReturnValueOnce(jsonResponse(issueListResponse))
+      .mockReturnValueOnce(jsonResponse(issueDetailResponse))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
+      .mockReturnValueOnce(jsonResponse(completedTriageResponse))
+      .mockReturnValueOnce(jsonResponse(approvedTriageResponse));
+
+    render(<App />);
+    fireEvent.click(await findIssueButton("CLI crashes on Windows"));
+    await screen.findByText("No deterministic triage has been run for this issue yet.");
+    fireEvent.click(screen.getByRole("button", { name: "Run deterministic triage" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+
+    expect(await screen.findByText(/Recorded decision: Approve/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Request revision" })).not.toBeInTheDocument();
+  });
+
+  it("shows a decision submission failure without recording a decision", async () => {
+    vi.mocked(fetch)
+      .mockReturnValueOnce(jsonResponse(healthResponse))
+      .mockReturnValueOnce(jsonResponse(issueListResponse))
+      .mockReturnValueOnce(jsonResponse(issueDetailResponse))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
+      .mockReturnValueOnce(jsonResponse(completedTriageResponse))
+      .mockRejectedValueOnce(new Error("network error"));
+
+    render(<App />);
+    fireEvent.click(await findIssueButton("CLI crashes on Windows"));
+    await screen.findByText("No deterministic triage has been run for this issue yet.");
+    fireEvent.click(screen.getByRole("button", { name: "Run deterministic triage" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Reject" }));
+
+    expect(await screen.findByText("The human decision could not be recorded.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
   });
 
   it("shows a failed triage state", async () => {

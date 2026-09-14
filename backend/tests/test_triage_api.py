@@ -89,6 +89,9 @@ def test_start_triage_returns_completed_result_with_separated_sections(
         "recommendation_status": "proposed",
         "human_review_status": "awaiting_human_review",
         "decision": None,
+        "decided_by": None,
+        "decided_at": None,
+        "rationale": None,
     }
     assert [event["status"] for event in payload["status_history"]] == [
         "queued",

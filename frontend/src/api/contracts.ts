@@ -50,10 +50,15 @@ export type TriageProposedAction = {
   rationale: string;
 };
 
+export type TriageDecision = "approve" | "reject" | "request_revision";
+
 export type TriageHumanReview = {
   recommendation_status: string;
   human_review_status: string;
-  decision: string | null;
+  decision: TriageDecision | null;
+  decided_by: string | null;
+  decided_at: string | null;
+  rationale: string | null;
 };
 
 export type TriageStatusEvent = {

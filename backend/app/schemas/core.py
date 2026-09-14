@@ -135,6 +135,14 @@ class TriageHumanReview(BaseModel):
     recommendation_status: str
     human_review_status: str
     decision: str | None
+    decided_by: UUID | None = None
+    decided_at: datetime | None = None
+    rationale: str | None = None
+
+
+class TriageDecisionRequest(BaseModel):
+    decision: str
+    rationale: str | None = Field(default=None, max_length=1000)
 
 
 class TriageStatusEvent(BaseModel):
