@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 
-import { ApiError, getHealth, getIssue, getIssues } from "./api/client";
+import { ApiError, getHealth, getIssue, getIssues, getTriageResult, startTriage } from "./api/client";
 import type {
   IssueDetail,
   IssueListItem,
   ServiceStatus as ServiceStatusContract,
+  TriageResult,
 } from "./api/contracts";
+import { IssueTriage } from "./components/IssueTriage";
 import { ServiceStatus } from "./components/ServiceStatus";
 import "./styles.css";
 
@@ -20,6 +22,10 @@ export default function App() {
   const [selectedIssue, setSelectedIssue] = useState<IssueDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<"not-found" | "error" | null>(null);
+  const [triageResult, setTriageResult] = useState<TriageResult | null>(null);
+  const [triageHasRun, setTriageHasRun] = useState(false);
+  const [triageRunning, setTriageRunning] = useState(false);
+  const [triageError, setTriageError] = useState(false);
 
   async function loadHealth() {
     setIsLoading(true);
@@ -40,6 +46,7 @@ export default function App() {
     setSelectedIssueId(null);
     setSelectedIssue(null);
     setDetailError(null);
+    resetTriageState();
     try {
       const response = await getIssues();
       setIssues(response.issues);
@@ -51,11 +58,19 @@ export default function App() {
     }
   }
 
+  function resetTriageState() {
+    setTriageResult(null);
+    setTriageHasRun(false);
+    setTriageRunning(false);
+    setTriageError(false);
+  }
+
   async function openIssue(issueId: string) {
     setSelectedIssueId(issueId);
     setSelectedIssue(null);
     setDetailError(null);
     setDetailLoading(true);
+    resetTriageState();
     try {
       setSelectedIssue(await getIssue(issueId));
     } catch (error) {
@@ -66,6 +81,33 @@ export default function App() {
       }
     } finally {
       setDetailLoading(false);
+    }
+
+    try {
+      setTriageResult(await getTriageResult(issueId));
+      setTriageHasRun(true);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        setTriageHasRun(false);
+      } else {
+        setTriageError(true);
+      }
+    }
+  }
+
+  async function runTriage() {
+    if (!selectedIssueId) {
+      return;
+    }
+    setTriageRunning(true);
+    setTriageError(false);
+    try {
+      setTriageResult(await startTriage(selectedIssueId));
+      setTriageHasRun(true);
+    } catch {
+      setTriageError(true);
+    } finally {
+      setTriageRunning(false);
     }
   }
 
@@ -161,6 +203,16 @@ export default function App() {
           </div>
         ) : null}
       </section>
+
+      {selectedIssue ? (
+        <IssueTriage
+          result={triageResult}
+          isRunning={triageRunning}
+          error={triageError}
+          hasRun={triageHasRun}
+          onRunTriage={() => void runTriage()}
+        />
+      ) : null}
     </main>
   );
 }

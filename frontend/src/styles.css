@@ -159,6 +159,22 @@ dd {
   white-space: pre-wrap;
 }
 
+.triage-result {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.triage-result h4 {
+  margin: 0 0 6px;
+  color: #164b55;
+}
+
+.triage-disclaimer {
+  font-weight: 700;
+  color: #7a3e1d;
+}
+
 @media (max-width: 760px) {
   h1 {
     font-size: 2.25rem;

@@ -457,9 +457,9 @@ At the end of every work session, update the Current Project State below. Do not
 
 **Current release:** Release 1 — Product foundation
 **Current milestone:** Milestone 1.4 — Deterministic triage workflow
-**Status:** Milestone 0.1 project controls, Milestone 0.2 runnable skeleton, Milestone 1.1 core data model, Milestone 1.2 bounded issue importer, and Milestone 1.3 issue browsing experience are complete. The Milestone 1.3 Docker demo blocker (API image missing the committed fixture) is fixed; the Docker Compose demo imports exactly 100 issues and Jesse has approved the milestone.
+**Status:** Milestone 0.1 project controls, Milestone 0.2 runnable skeleton, Milestone 1.1 core data model, Milestone 1.2 bounded issue importer, and Milestone 1.3 issue browsing experience are complete. Milestone 1.4 is in progress: deterministic classify → retrieve_fixture_evidence → assess → propose stages, synchronous queued/running/completed/failed status persistence, versioned triage API contracts, and a frontend triage action with separated evidence/inference/proposal/human-review sections have been added and verified against a migrated PostgreSQL database via Docker Compose (76 backend tests passed) and the frontend suite (11 tests passed). Milestone 1.5's human decision controls have not been started.
 **Last approved decision:** Adopt governed, evidence-backed GitHub issue triage as the verified business case while retaining the approved portfolio rubric.
-**Next action:** Begin Milestone 1.4 deterministic triage workflow (classify → retrieve fixture evidence → assess → propose → human review).
+**Next action:** Capture visible triage demo evidence and complete Jesse's ownership checkpoint before marking R1-04 complete.
 **Blockers:** None identified.
 
 **Ownership follow-up:** Review remaining technical ownership topics when their corresponding components are implemented.

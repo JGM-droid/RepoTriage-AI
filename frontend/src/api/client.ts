@@ -1,4 +1,4 @@
-import type { IssueDetail, IssueListResponse, ServiceStatus } from "./contracts";
+import type { IssueDetail, IssueListResponse, ServiceStatus, TriageResult } from "./contracts";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -11,8 +11,12 @@ export class ApiError extends Error {
   }
 }
 
-async function fetchJson<T>(path: string, errorMessage: string): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`);
+async function fetchJson<T>(
+  path: string,
+  errorMessage: string,
+  init?: RequestInit,
+): Promise<T> {
+  const response = await fetch(`${apiBaseUrl}${path}`, init);
   if (!response.ok) {
     throw new ApiError(errorMessage, response.status);
   }
@@ -29,4 +33,23 @@ export async function getIssues(): Promise<IssueListResponse> {
 
 export async function getIssue(issueId: string): Promise<IssueDetail> {
   return fetchJson<IssueDetail>(`/api/v1/issues/${issueId}`, "The imported issue could not be loaded.");
+}
+
+export async function getTriageResult(issueId: string): Promise<TriageResult> {
+  return fetchJson<TriageResult>(
+    `/api/v1/issues/${issueId}/triage`,
+    "The deterministic triage result could not be loaded.",
+  );
+}
+
+export async function startTriage(issueId: string): Promise<TriageResult> {
+  return fetchJson<TriageResult>(
+    `/api/v1/issues/${issueId}/triage`,
+    "Deterministic triage could not be started.",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    },
+  );
 }

@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RepositoryRecord(BaseModel):
@@ -101,5 +101,56 @@ class AuditEventRecord(BaseModel):
     actor_id: UUID | None
     event_type: str
     metadata_: dict[str, object] | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TriageRequest(BaseModel):
+    ruleset_version: str = "1.0"
+
+
+class TriageEvidenceItem(BaseModel):
+    field: str
+    excerpt: str
+    source_url: str
+
+
+class TriageClassification(BaseModel):
+    label: str
+    matched_rule: str
+    matched_keywords: list[str] = Field(default_factory=list)
+
+
+class TriageAssessment(BaseModel):
+    severity: str
+    rationale: str
+
+
+class TriageProposedAction(BaseModel):
+    action: str
+    rationale: str
+
+
+class TriageHumanReview(BaseModel):
+    recommendation_status: str
+    human_review_status: str
+    decision: str | None
+
+
+class TriageStatusEvent(BaseModel):
+    status: str
+    created_at: datetime
+
+
+class TriageResult(BaseModel):
+    analysis_id: UUID
+    issue_id: UUID
+    status: str
+    classification: TriageClassification | None
+    evidence: list[TriageEvidenceItem]
+    assessment: TriageAssessment | None
+    proposed_action: TriageProposedAction | None
+    human_review: TriageHumanReview | None
+    status_history: list[TriageStatusEvent]
     created_at: datetime
     updated_at: datetime

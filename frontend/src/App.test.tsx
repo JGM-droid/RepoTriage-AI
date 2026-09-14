@@ -26,6 +26,44 @@ const issueDetailResponse = {
   ...issueListResponse.issues[0],
   body: "The imported issue body is visible without analysis.",
 };
+const noTriageYetResponse = {
+  error: "triage_not_found",
+  message: "No deterministic triage has been run for this issue yet.",
+};
+const completedTriageResponse = {
+  analysis_id: "analysis-1",
+  issue_id: "issue-1",
+  status: "completed",
+  classification: { label: "bug-crash", matched_rule: "crash-keyword", matched_keywords: ["crash"] },
+  evidence: [{ field: "title", excerpt: "CLI crashes on Windows", source_url: "https://github.com/pallets/flask/issues/101" }],
+  assessment: { severity: "high", rationale: "Matched rule 'crash-keyword'." },
+  proposed_action: { action: "Prioritize for immediate triage.", rationale: "Derived from classification." },
+  human_review: { recommendation_status: "proposed", human_review_status: "awaiting_human_review", decision: null },
+  status_history: [
+    { status: "queued", created_at: "2026-09-14T12:00:00Z" },
+    { status: "running", created_at: "2026-09-14T12:00:01Z" },
+    { status: "completed", created_at: "2026-09-14T12:00:02Z" },
+  ],
+  created_at: "2026-09-14T12:00:00Z",
+  updated_at: "2026-09-14T12:00:00Z",
+};
+const failedTriageResponse = {
+  analysis_id: "analysis-2",
+  issue_id: "issue-1",
+  status: "failed",
+  classification: null,
+  evidence: [],
+  assessment: null,
+  proposed_action: null,
+  human_review: null,
+  status_history: [
+    { status: "queued", created_at: "2026-09-14T12:00:00Z" },
+    { status: "running", created_at: "2026-09-14T12:00:01Z" },
+    { status: "failed", created_at: "2026-09-14T12:00:02Z" },
+  ],
+  created_at: "2026-09-14T12:00:00Z",
+  updated_at: "2026-09-14T12:00:00Z",
+};
 
 function jsonResponse(body: object, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), { status }));
@@ -107,7 +145,8 @@ describe("App", () => {
     vi.mocked(fetch)
       .mockReturnValueOnce(jsonResponse(healthResponse))
       .mockReturnValueOnce(jsonResponse(issueListResponse))
-      .mockReturnValueOnce(jsonResponse(issueDetailResponse));
+      .mockReturnValueOnce(jsonResponse(issueDetailResponse))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404));
 
     render(<App />);
     fireEvent.click(await findIssueButton("CLI crashes on Windows"));
@@ -117,11 +156,82 @@ describe("App", () => {
     expect(screen.getByText("https://github.com/pallets/flask/issues/101")).toBeInTheDocument();
   });
 
+  it("shows the initial no-analysis triage state for a newly opened issue", async () => {
+    vi.mocked(fetch)
+      .mockReturnValueOnce(jsonResponse(healthResponse))
+      .mockReturnValueOnce(jsonResponse(issueListResponse))
+      .mockReturnValueOnce(jsonResponse(issueDetailResponse))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404));
+
+    render(<App />);
+    fireEvent.click(await findIssueButton("CLI crashes on Windows"));
+
+    expect(
+      await screen.findByText("No deterministic triage has been run for this issue yet."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a running state while deterministic triage executes", async () => {
+    vi.mocked(fetch)
+      .mockReturnValueOnce(jsonResponse(healthResponse))
+      .mockReturnValueOnce(jsonResponse(issueListResponse))
+      .mockReturnValueOnce(jsonResponse(issueDetailResponse))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
+      .mockReturnValueOnce(new Promise(() => {}));
+
+    render(<App />);
+    fireEvent.click(await findIssueButton("CLI crashes on Windows"));
+    await screen.findByText("No deterministic triage has been run for this issue yet.");
+    fireEvent.click(screen.getByRole("button", { name: "Run deterministic triage" }));
+
+    expect(await screen.findByText("Running deterministic triage...")).toBeInTheDocument();
+  });
+
+  it("shows the separated triage result after a completed run", async () => {
+    vi.mocked(fetch)
+      .mockReturnValueOnce(jsonResponse(healthResponse))
+      .mockReturnValueOnce(jsonResponse(issueListResponse))
+      .mockReturnValueOnce(jsonResponse(issueDetailResponse))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
+      .mockReturnValueOnce(jsonResponse(completedTriageResponse));
+
+    render(<App />);
+    fireEvent.click(await findIssueButton("CLI crashes on Windows"));
+    await screen.findByText("No deterministic triage has been run for this issue yet.");
+    fireEvent.click(screen.getByRole("button", { name: "Run deterministic triage" }));
+
+    expect(
+      await screen.findByText("This result is rule-based and has not been approved by a human."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Evidence")).toBeInTheDocument();
+    expect(screen.getByText("System inference")).toBeInTheDocument();
+    expect(screen.getByText("Proposed action")).toBeInTheDocument();
+    expect(screen.getByText(/Awaiting human review/)).toBeInTheDocument();
+    expect(screen.getByText(/recommendation: proposed/)).toBeInTheDocument();
+  });
+
+  it("shows a failed triage state", async () => {
+    vi.mocked(fetch)
+      .mockReturnValueOnce(jsonResponse(healthResponse))
+      .mockReturnValueOnce(jsonResponse(issueListResponse))
+      .mockReturnValueOnce(jsonResponse(issueDetailResponse))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
+      .mockReturnValueOnce(jsonResponse(failedTriageResponse));
+
+    render(<App />);
+    fireEvent.click(await findIssueButton("CLI crashes on Windows"));
+    await screen.findByText("No deterministic triage has been run for this issue yet.");
+    fireEvent.click(screen.getByRole("button", { name: "Run deterministic triage" }));
+
+    expect(await screen.findByText("Deterministic triage failed to complete.")).toBeInTheDocument();
+  });
+
   it("shows issue not found when detail returns 404", async () => {
     vi.mocked(fetch)
       .mockReturnValueOnce(jsonResponse(healthResponse))
       .mockReturnValueOnce(jsonResponse(issueListResponse))
-      .mockReturnValueOnce(jsonResponse({ error: "issue_not_found", message: "Issue not found." }, 404));
+      .mockReturnValueOnce(jsonResponse({ error: "issue_not_found", message: "Issue not found." }, 404))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404));
 
     render(<App />);
     fireEvent.click(await findIssueButton("CLI crashes on Windows"));
