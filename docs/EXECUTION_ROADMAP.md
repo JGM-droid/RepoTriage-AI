@@ -456,10 +456,10 @@ At the end of every work session, update the Current Project State below. Do not
 ## 11. Current Project State
 
 **Current release:** Release 1 — Product foundation
-**Current milestone:** Milestone 1.4 — Deterministic triage workflow
-**Status:** Milestone 0.1 project controls, Milestone 0.2 runnable skeleton, Milestone 1.1 core data model, Milestone 1.2 bounded issue importer, and Milestone 1.3 issue browsing experience are complete. Milestone 1.4 is in progress: deterministic classify → retrieve_fixture_evidence → assess → propose stages, synchronous queued/running/completed/failed status persistence, versioned triage API contracts, and a frontend triage action with separated evidence/inference/proposal/human-review sections have been added and verified against a migrated PostgreSQL database via Docker Compose (76 backend tests passed) and the frontend suite (11 tests passed). Milestone 1.5's human decision controls have not been started.
+**Current milestone:** Milestone 1.5 — Human decision gate
+**Status:** Milestone 0.1 project controls, Milestone 0.2 runnable skeleton, Milestone 1.1 core data model, Milestone 1.2 bounded issue importer, Milestone 1.3 issue browsing experience, and Milestone 1.4 deterministic triage workflow are complete. Milestone 1.4 verified evidence: all five stages (classify → retrieve_fixture_evidence → assess → propose → human_review) execute in order; the audit-backed lifecycle exposes queued → running → completed on success and queued → running → failed on forced failure; Recommendation remains proposed with no HumanDecision created; PostgreSQL triage tests (26 passed) and frontend tests (11 passed) passed; GitHub Actions passed for commit `e75f295`; a visible browser demo showed separated Evidence, System inference, Proposed action, and Human review status sections, with issue #5676 producing a deterministic closed-needs-verification classification, low severity, and a proposed verification action; a CORS fix restricts POST to the approved frontend origin only (3 focused tests passed) and Jesse has approved the milestone. Milestone 1.5's human decision (approve/reject/revise) controls have not been started.
 **Last approved decision:** Adopt governed, evidence-backed GitHub issue triage as the verified business case while retaining the approved portfolio rubric.
-**Next action:** Capture visible triage demo evidence and complete Jesse's ownership checkpoint before marking R1-04 complete.
+**Next action:** Begin Milestone 1.5 human decision gate (authorized reviewer approve/reject/revise; no decision inferred from model output).
 **Blockers:** None identified.
 
 **Ownership follow-up:** Review remaining technical ownership topics when their corresponding components are implemented.
