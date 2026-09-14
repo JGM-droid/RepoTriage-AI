@@ -9,6 +9,7 @@ COPY pyproject.toml ./
 COPY app ./app
 COPY alembic.ini ./
 COPY alembic ./alembic
+COPY fixtures ./fixtures
 
 RUN pip install --no-cache-dir .
 
