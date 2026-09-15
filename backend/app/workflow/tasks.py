@@ -1,8 +1,12 @@
 """Celery task and durable orchestration for the deterministic triage workflow.
 
 Executes classify -> retrieve_fixture_evidence -> assess -> propose ->
-human_review in a background worker (Milestone 2.1) instead of inside the
-HTTP request. PostgreSQL persists the workflow-run (`Analysis`) status,
+ai_inference -> human_review in a background worker (Milestone 2.1;
+`ai_inference` added in Milestone 2.2, see ADR 0008) instead of inside the
+HTTP request. `ai_inference` supplements the deterministic classification,
+severity, and proposed action with an AI-generated narrative grounded in
+the same evidence — it never changes them, and it never creates a
+`HumanDecision`. PostgreSQL persists the workflow-run (`Analysis`) status,
 current stage, attempt count, and one `StageAttempt` row per stage attempt
 (including that stage's deterministic output), so a crashed or re-delivered
 task resumes at the first incomplete stage of its attempt instead of
@@ -25,6 +29,8 @@ from uuid import UUID
 from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy.orm import Session
 
+from app.ai_gateway.contracts import AIResponse
+from app.ai_gateway.stage import run_ai_inference_stage
 from app.config import get_settings
 from app.database import SessionLocal
 from app.models.core import Analysis, AuditEvent, Issue, Recommendation, StageAttempt
@@ -43,9 +49,17 @@ from app.triage.rules import (
 )
 from app.workflow.celery_app import celery_app
 
-STAGE_ORDER = ("classify", "retrieve_fixture_evidence", "assess", "propose", "human_review")
+STAGE_ORDER = (
+    "classify",
+    "retrieve_fixture_evidence",
+    "assess",
+    "propose",
+    "ai_inference",
+    "human_review",
+)
 TERMINAL_STATUSES = ("completed", "failed", "timed_out")
 _STATUS_EVENT_TYPE = "triage_status_transition"
+_AI_ROUTING_EVENT_TYPE = "ai_inference_routing"
 
 settings = get_settings()
 
@@ -118,6 +132,8 @@ def _deserialize_stage_output(stage: str, raw: str) -> object:
         return Assessment(**data)
     if stage == "propose":
         return ProposedAction(**data)
+    if stage == "ai_inference":
+        return AIResponse(**data)
     if stage == "human_review":
         return HumanReviewBoundary(**data)
     raise ValueError(f"Unknown stage: {stage}")  # pragma: no cover - exhaustive STAGE_ORDER
@@ -170,7 +186,7 @@ def _run_stage(session, analysis, stage, attempt_number, func, *args):
     return result
 
 
-def _serialize_content(classification, evidence, assessment, proposal, review) -> str:
+def _serialize_content(classification, evidence, assessment, proposal, ai_response, review) -> str:
     return json.dumps(
         {
             "ruleset_version": TRIAGE_RULESET_VERSION,
@@ -178,9 +194,41 @@ def _serialize_content(classification, evidence, assessment, proposal, review) -
             "evidence": [asdict(item) for item in evidence],
             "assessment": asdict(assessment),
             "proposed_action": asdict(proposal),
+            "ai_inference": asdict(ai_response),
             "human_review": asdict(review),
         }
     )
+
+
+def _record_ai_routing_event(
+    session: Session,
+    issue: Issue,
+    analysis: Analysis,
+    attempt_number: int,
+    ai_response: AIResponse,
+) -> None:
+    """Record which provider served this attempt and why (routing decision
+    and any fallback reason) — a visible, independently retrievable audit
+    record, matching how `record_transition` already documents status
+    changes. Only called when the `ai_inference` stage actually executed
+    this call (see the `existing_ai_attempt` check in
+    `process_workflow_run`), so redelivery never duplicates this event."""
+    session.add(
+        AuditEvent(
+            repository_id=issue.repository_id,
+            issue_id=issue.id,
+            event_type=_AI_ROUTING_EVENT_TYPE,
+            metadata_={
+                "analysis_id": str(analysis.id),
+                "attempt_number": attempt_number,
+                "provider": ai_response.provider,
+                "model": ai_response.model,
+                "status": ai_response.status,
+                "fallback_reason": ai_response.fallback_reason,
+            },
+        )
+    )
+    session.commit()
 
 
 def process_workflow_run(session: Session, analysis_id: UUID) -> Analysis:
@@ -230,6 +278,29 @@ def process_workflow_run(session: Session, analysis_id: UUID) -> Analysis:
         proposal = _run_stage(
             session, analysis, "propose", attempt_number, propose, issue, classification, assessment
         )
+        # Detected before `_run_stage` runs, so the routing/fallback audit
+        # event below is written only when this attempt genuinely called
+        # the provider (or mock) fresh — never duplicated on a resumed or
+        # re-delivered task, whose `ai_inference` stage is already
+        # `succeeded` and gets skipped entirely by `_run_stage`.
+        ai_stage_already_succeeded = (
+            _existing_succeeded_attempt(session, analysis, "ai_inference", attempt_number)
+            is not None
+        )
+        ai_response = _run_stage(
+            session,
+            analysis,
+            "ai_inference",
+            attempt_number,
+            run_ai_inference_stage,
+            issue,
+            classification,
+            evidence,
+            assessment,
+            proposal,
+        )
+        if not ai_stage_already_succeeded:
+            _record_ai_routing_event(session, issue, analysis, attempt_number, ai_response)
         review = _run_stage(
             session, analysis, "human_review", attempt_number, human_review, proposal
         )
@@ -254,7 +325,9 @@ def process_workflow_run(session: Session, analysis_id: UUID) -> Analysis:
     recommendation = Recommendation(
         analysis_id=analysis.id,
         status=review.recommendation_status,
-        content=_serialize_content(classification, evidence, assessment, proposal, review),
+        content=_serialize_content(
+            classification, evidence, assessment, proposal, ai_response, review
+        ),
     )
     session.add(recommendation)
     analysis.attempt_count = attempt_number

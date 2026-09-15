@@ -50,6 +50,18 @@ export type TriageProposedAction = {
   rationale: string;
 };
 
+export type TriageAIInference = {
+  narrative: string;
+  status: "succeeded" | "fallback";
+  provider: string;
+  model: string;
+  prompt_name: string;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_cost_usd: number;
+  fallback_reason: string | null;
+};
+
 export type TriageDecision = "approve" | "reject" | "request_revision";
 
 export type TriageHumanReview = {
@@ -92,6 +104,7 @@ export type TriageResult = {
   evidence: TriageEvidenceItem[];
   assessment: TriageAssessment | null;
   proposed_action: TriageProposedAction | null;
+  ai_inference: TriageAIInference | null;
   human_review: TriageHumanReview | null;
   status_history: TriageStatusEvent[];
   stage_attempts: TriageStageAttempt[];

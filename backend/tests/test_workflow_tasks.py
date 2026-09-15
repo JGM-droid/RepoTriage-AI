@@ -5,6 +5,7 @@ wraps) so retry, timeout, and resumption semantics are tested without
 depending on real Celery timing or a live broker.
 """
 
+import json
 import os
 from collections.abc import Iterator
 
@@ -15,8 +16,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import app.workflow.tasks as workflow_tasks
+from app.ai_gateway import mock_adapter
+from app.ai_gateway.contracts import STATUS_FALLBACK, AIRequest, AIResponse
+from app.ai_gateway.stage import run_ai_inference_stage
 from app.models.core import (
     Analysis,
+    AuditEvent,
     HumanDecision,
     Issue,
     Recommendation,
@@ -269,6 +274,146 @@ def test_a_crash_after_a_middle_stage_succeeds_resumes_without_rerunning_it(
     assert database_session.query(Recommendation).filter_by(analysis_id=analysis.id).count() == 1
     # 5. no HumanDecision is ever created by the worker.
     assert database_session.query(HumanDecision).count() == 0
+
+
+def test_ai_inference_stage_records_one_routing_audit_event_with_mock_provenance(
+    database_session: Session,
+) -> None:
+    issue = add_issue(database_session)
+    analysis = start_analysis(database_session, issue)
+
+    result = process_workflow_run(database_session, analysis.id)
+
+    assert result.status == "completed"
+    events = (
+        database_session.query(AuditEvent)
+        .filter_by(issue_id=issue.id, event_type="ai_inference_routing")
+        .all()
+    )
+    assert len(events) == 1
+    assert events[0].metadata_["provider"] == "mock"
+    assert events[0].metadata_["status"] == "succeeded"
+    assert events[0].metadata_["fallback_reason"] is None
+    assert events[0].metadata_["analysis_id"] == str(analysis.id)
+
+    recommendation = database_session.query(Recommendation).filter_by(analysis_id=analysis.id).one()
+    content = json.loads(recommendation.content)
+    assert content["ai_inference"]["provider"] == "mock"
+    assert content["ai_inference"]["status"] == "succeeded"
+    assert content["ai_inference"]["input_tokens"] == 0
+    assert content["ai_inference"]["estimated_cost_usd"] == 0.0
+
+
+def test_workflow_completes_with_a_deterministic_result_when_the_provider_is_unavailable(
+    database_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A controlled provider failure must never block the deterministic
+    workflow: the fallback AIResponse is accepted like any other successful
+    stage output, and the recommendation still completes normally."""
+    issue = add_issue(database_session)
+    analysis = start_analysis(database_session, issue)
+
+    def fallback_ai_inference(issue_arg, classification, evidence, assessment, proposed_action):
+        del issue_arg
+        fallback = mock_adapter.call(
+            AIRequest(
+                task="triage_narrative",
+                classification=classification,
+                evidence=evidence,
+                assessment=assessment,
+                proposed_action=proposed_action,
+            )
+        )
+        return AIResponse(
+            narrative=fallback.narrative,
+            status=STATUS_FALLBACK,
+            provider=fallback.provider,
+            model=fallback.model,
+            prompt_name=fallback.prompt_name,
+            input_tokens=0,
+            output_tokens=0,
+            estimated_cost_usd=0.0,
+            latency_ms=12.5,
+            fallback_reason="openai_timeout",
+        )
+
+    monkeypatch.setattr(workflow_tasks, "run_ai_inference_stage", fallback_ai_inference)
+
+    result = process_workflow_run(database_session, analysis.id)
+
+    assert result.status == "completed"
+    recommendation = database_session.query(Recommendation).filter_by(analysis_id=analysis.id).one()
+    content = json.loads(recommendation.content)
+    assert content["ai_inference"]["status"] == "fallback"
+    assert content["ai_inference"]["fallback_reason"] == "openai_timeout"
+    assert database_session.query(HumanDecision).count() == 0
+
+
+def test_a_killed_worker_redelivered_after_ai_inference_succeeds_does_not_call_the_provider_again(
+    database_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The single most important cost-safety property: once the paid (or
+    mock) call for an attempt has succeeded and its output is persisted,
+    redelivery must reuse it, never call the provider again."""
+    issue = add_issue(database_session)
+    analysis = start_analysis(database_session, issue)
+
+    classification = triage_rules.classify(issue)
+    evidence = triage_rules.retrieve_fixture_evidence(issue, classification)
+    assessment = triage_rules.assess(issue, classification, evidence)
+    proposal = triage_rules.propose(issue, classification, assessment)
+    ai_response = run_ai_inference_stage(issue, classification, evidence, assessment, proposal)
+
+    analysis.status = "running"
+    analysis.current_stage = "ai_inference"
+    database_session.commit()
+    for stage, result in (
+        ("classify", classification),
+        ("retrieve_fixture_evidence", evidence),
+        ("assess", assessment),
+        ("propose", proposal),
+        ("ai_inference", ai_response),
+    ):
+        database_session.add(
+            StageAttempt(
+                analysis_id=analysis.id,
+                stage=stage,
+                attempt_number=1,
+                status="succeeded",
+                output=workflow_tasks._serialize_stage_output(stage, result),
+            )
+        )
+    database_session.commit()
+
+    def _must_not_run(*args, **kwargs):
+        raise AssertionError(
+            "the AI provider was called again after this attempt already succeeded"
+        )
+
+    monkeypatch.setattr(workflow_tasks, "run_ai_inference_stage", _must_not_run)
+    monkeypatch.setattr(workflow_tasks, "classify", _must_not_run)
+    monkeypatch.setattr(workflow_tasks, "retrieve_fixture_evidence", _must_not_run)
+    monkeypatch.setattr(workflow_tasks, "assess", _must_not_run)
+    monkeypatch.setattr(workflow_tasks, "propose", _must_not_run)
+
+    result = process_workflow_run(database_session, analysis.id)
+
+    assert result.status == "completed"
+    attempts = database_session.query(StageAttempt).filter_by(analysis_id=analysis.id).all()
+    stage_counts = {stage: 0 for stage in workflow_tasks.STAGE_ORDER}
+    for attempt in attempts:
+        stage_counts[attempt.stage] += 1
+    assert stage_counts == {stage: 1 for stage in workflow_tasks.STAGE_ORDER}
+    assert database_session.query(Recommendation).filter_by(analysis_id=analysis.id).count() == 1
+    assert database_session.query(HumanDecision).count() == 0
+    # No routing event is (re)written for a stage that was skipped, not
+    # freshly executed, on this resumed call.
+    routing_events = (
+        database_session.query(AuditEvent)
+        .filter_by(issue_id=issue.id, event_type="ai_inference_routing")
+        .all()
+    )
+    assert routing_events == []
 
 
 def test_database_rejects_a_second_stage_attempt_row_for_the_same_attempt(

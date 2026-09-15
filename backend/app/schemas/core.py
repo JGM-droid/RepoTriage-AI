@@ -131,6 +131,25 @@ class TriageProposedAction(BaseModel):
     rationale: str
 
 
+class TriageAIInference(BaseModel):
+    """AI-generated narrative supplementing the deterministic recommendation.
+
+    Never a substitute for `classification`/`assessment`/`proposed_action`
+    (all deterministic) or `human_review` (an explicit human decision).
+    Extra stored fields such as latency are intentionally not exposed here.
+    """
+
+    narrative: str
+    status: str
+    provider: str
+    model: str
+    prompt_name: str
+    input_tokens: int
+    output_tokens: int
+    estimated_cost_usd: float
+    fallback_reason: str | None = None
+
+
 class TriageHumanReview(BaseModel):
     recommendation_status: str
     human_review_status: str
@@ -168,6 +187,7 @@ class TriageResult(BaseModel):
     evidence: list[TriageEvidenceItem]
     assessment: TriageAssessment | None
     proposed_action: TriageProposedAction | None
+    ai_inference: TriageAIInference | None = None
     human_review: TriageHumanReview | None
     status_history: list[TriageStatusEvent]
     stage_attempts: list[TriageStageAttempt]

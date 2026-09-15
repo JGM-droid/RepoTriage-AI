@@ -7,9 +7,17 @@ canonical, durable workflow-state store. See docs/adr/0007.
 
 from celery import Celery
 
+from app.ai_gateway.router import ensure_ai_gateway_configured
 from app.config import get_settings
 
 settings = get_settings()
+
+# Fail startup, not a task: an invalid AI-gateway configuration (e.g.
+# AI_PROVIDER=openai with no API key) must crash the worker/API process
+# immediately rather than surface later as a confusing per-task failure or,
+# worse, be silently treated as a provider failure and masked by the mock
+# fallback. See ADR 0008.
+ensure_ai_gateway_configured(settings)
 
 celery_app = Celery(
     "repotriage",

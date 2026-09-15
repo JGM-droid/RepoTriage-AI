@@ -19,6 +19,14 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       CORS_ORIGIN: ${CORS_ORIGIN}
       REDIS_URL: redis://redis:6379/0
+      # Mock by default: the stack stays free and offline unless AI_PROVIDER
+      # is explicitly set to openai (with an API key) in the environment/.env.
+      AI_PROVIDER: ${AI_PROVIDER:-mock}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      AI_PROVIDER_TIMEOUT_SECONDS: ${AI_PROVIDER_TIMEOUT_SECONDS:-20}
+      OPENAI_INPUT_PRICE_PER_MILLION_USD: ${OPENAI_INPUT_PRICE_PER_MILLION_USD:-0.15}
+      OPENAI_OUTPUT_PRICE_PER_MILLION_USD: ${OPENAI_OUTPUT_PRICE_PER_MILLION_USD:-0.60}
     depends_on:
       db:
         condition: service_healthy
@@ -47,6 +55,12 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       CORS_ORIGIN: ${CORS_ORIGIN}
       REDIS_URL: redis://redis:6379/0
+      AI_PROVIDER: ${AI_PROVIDER:-mock}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      AI_PROVIDER_TIMEOUT_SECONDS: ${AI_PROVIDER_TIMEOUT_SECONDS:-20}
+      OPENAI_INPUT_PRICE_PER_MILLION_USD: ${OPENAI_INPUT_PRICE_PER_MILLION_USD:-0.15}
+      OPENAI_OUTPUT_PRICE_PER_MILLION_USD: ${OPENAI_OUTPUT_PRICE_PER_MILLION_USD:-0.60}
     depends_on:
       db:
         condition: service_healthy

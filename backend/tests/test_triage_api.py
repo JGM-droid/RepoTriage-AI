@@ -122,9 +122,19 @@ def test_polling_after_start_returns_the_completed_result_with_separated_section
         "retrieve_fixture_evidence",
         "assess",
         "propose",
+        "ai_inference",
         "human_review",
     ]
     assert all(attempt["status"] == "succeeded" for attempt in payload["stage_attempts"])
+
+    # The AI-generated narrative supplements, but never replaces, the
+    # deterministic sections above; the default demo/test provider is the
+    # zero-cost mock adapter.
+    assert payload["ai_inference"]["provider"] == "mock"
+    assert payload["ai_inference"]["status"] == "succeeded"
+    assert payload["ai_inference"]["input_tokens"] == 0
+    assert payload["ai_inference"]["estimated_cost_usd"] == 0.0
+    assert payload["ai_inference"]["narrative"]
 
 
 def test_get_triage_returns_stable_not_found_when_no_triage_has_run(
