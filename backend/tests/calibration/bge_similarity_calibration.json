@@ -1,0 +1,173 @@
+{
+  "_comment": "Frozen calibration evidence for retrieval_min_similarity (Milestone 2.3 final query-quality correction, see ADR 0009). Measured against the real, already-ingested demo corpus (100 pallets/flask issues + 6 documentation excerpts) using the real BAAI/bge-small-en-v1.5 model via fastembed 0.8.0, with the official BGE query instruction ('Represent this sentence for searching relevant passages: ') applied to the query side only, exactly as app.retrieval.embedding.embed_query does, and with the query text built by the real, current production app.retrieval.stage.build_query_text (issue title + bounded body excerpt + deduplicated matched keywords only — no severity/rationale/proposed-action/label boilerplate). Scores are cosine similarity (1 - cosine distance) read directly from the already-stored passage embeddings compared against freshly computed query embeddings. This supersedes the 2026-09-16 snapshot measured against the earlier, boilerplate-including query builder, which is why every score here differs from that prior fixture. This is a small (~8-pair), one-time snapshot, not a full evaluation harness (Milestone 2.5) — see 'known_limitations'.",
+  "model": "BAAI/bge-small-en-v1.5",
+  "embedding_library_version": "fastembed-0.8.0",
+  "query_instruction_applied": true,
+  "query_builder": "app.retrieval.stage.build_query_text (issue-specific content only: normalized title + bounded body excerpt + deduplicated matched keywords)",
+  "measured_against": "live demo database (100 issues + 6 documents, already ingested)",
+  "measured_date": "2026-09-15",
+  "chosen_threshold": 0.65,
+  "high_confidence_similarity": 0.90,
+  "positive_examples": [
+    {
+      "query_source": "issue:5755",
+      "target": "issue:5756",
+      "description": "Confirmed real near-duplicate: 'Flask cannot find /security/logic API' vs '404 Flask cannot find /security/login API'.",
+      "score": 0.9276,
+      "category": "issue-issue"
+    },
+    {
+      "query_source": "issue:6047",
+      "target": "issue:6048",
+      "description": "Literal duplicate title+body ('AI Junk' / 'LLM junk removed').",
+      "score": 0.9457,
+      "category": "issue-issue"
+    },
+    {
+      "query_source": "issue:6047",
+      "target": "issue:6049",
+      "description": "Literal duplicate title+body ('AI Junk' / 'LLM junk removed').",
+      "score": 0.9457,
+      "category": "issue-issue"
+    },
+    {
+      "query_source": "issue:5786",
+      "target": "doc:quickstart#sessions",
+      "description": "Issue<->document pair: 'Session is not updated on redirect target endpoint in tests' vs the Sessions documentation excerpt. Below chosen_threshold on its own (see known_limitations) — kept in the fixture as measured evidence, not asserted as a retrievable positive.",
+      "score": 0.6153,
+      "category": "issue-document",
+      "below_chosen_threshold": true
+    }
+  ],
+  "negative_examples": [
+    {
+      "query_source": "issue:5746",
+      "target": "issue:5768",
+      "description": "'MAX_FORM_MEMORY_SIZE not being picked up correctly' vs 'Flask documentation website does not support dark mode' — clearly unrelated topics. Strongest measured issue<->issue negative.",
+      "score": 0.5750,
+      "category": "issue-issue"
+    },
+    {
+      "query_source": "issue:5746",
+      "target": "issue:6047",
+      "description": "'MAX_FORM_MEMORY_SIZE...' vs 'AI Junk' spam issue — unrelated.",
+      "score": 0.4558,
+      "category": "issue-issue"
+    },
+    {
+      "query_source": "issue:5768",
+      "target": "issue:5786",
+      "description": "'Flask documentation website does not support dark mode' vs 'Session is not updated on redirect target endpoint in tests' — unrelated.",
+      "score": 0.5717,
+      "category": "issue-issue"
+    },
+    {
+      "query_source": "issue:5746",
+      "target": "doc:quickstart#sessions",
+      "description": "'MAX_FORM_MEMORY_SIZE...' vs the Sessions documentation excerpt — unrelated, but scores *higher* than the one measured issue<->document positive (0.6153). This is the known issue<->document overlap — see known_limitations. A normalized-lexical-overlap check was also measured for this pair and did not resolve it in the expected direction (see lexical_overlap_check below), so chosen_threshold=0.65 excludes both this negative and the one measured document positive, favoring missing a weak cross-genre match over presenting unsupported evidence.",
+      "score": 0.6239,
+      "category": "issue-document",
+      "above_issue_issue_gap": true
+    }
+  ],
+  "short_meaningful_query_examples": [
+    {
+      "query_source": "issue:5766 (title 'Tt', minimal but meaningful body)",
+      "target": "issue:5756",
+      "description": "Shortest real meaningful (non-punctuation) issue body measured, to sanity-check the low end of the score range. Well below chosen_threshold.",
+      "score": 0.3673
+    },
+    {
+      "query_source": "issue:5766 (title 'Tt', minimal but meaningful body)",
+      "target": "doc:quickstart#sessions",
+      "description": "Same minimal issue against a document. Well below chosen_threshold.",
+      "score": 0.4765
+    }
+  ],
+  "rejected_before_embedding_examples": [
+    {
+      "query_source": "issue:5929 (title/body reduce to '. .' after build_query_text)",
+      "description": "Punctuation-only issue-specific content. Rejected by has_sufficient_query_content before any embedding call or database query — confirmed via adapter.calls == [] equivalent live check (zero embedding calls observed).",
+      "status": "insufficient_query"
+    }
+  ],
+  "lexical_overlap_check": {
+    "_comment": "Measured normalized Jaccard overlap of extract_meaningful_terms(query) vs extract_meaningful_terms(candidate content) for the one ambiguous issue<->document pair, to evaluate whether a blanket lexical-overlap rule could resolve it. It could not: the signal ran backwards (the negative pair had *higher* lexical overlap than the positive pair) — this is a separate, earlier finding from the two-band false-positive correction below, and is why a *blanket* lexical requirement was rejected in favor of the medium-confidence-band-only rule using *discriminative* (non-generic) terms.",
+    "issue:5786 -> doc:quickstart#sessions (the measured positive, score 0.6153)": 0.0282,
+    "issue:5746 -> doc:quickstart#sessions (the measured negative, score 0.6239)": 0.0735
+  },
+  "false_positive_regression_examples": {
+    "_comment": "Milestone 2.3 false-positive correction (Jesse's visible demo, 2026-09-15): the prior single close-case margin [0.65, 0.70) was too narrow — issue:5942 scored 0.7404 against issue:5755, above the old 0.70 ceiling, so it bypassed lexical confirmation and was accepted on semantic score alone despite being topically unrelated. Replaced with two bands: [min_similarity, high_confidence_similarity) requires a shared *discriminative* term (app.retrieval.query_terms.extract_discriminative_terms — meaningful terms minus corpus-generic terms and standalone numbers); >= high_confidence_similarity accepts on semantic score alone. All three scores below are re-measured against the real demo corpus with the real production build_query_text/BGE model, and the discriminative-term overlap is computed with the real extract_discriminative_terms.",
+    "examples": [
+      {
+        "query_source": "issue:5755",
+        "target": "issue:5756",
+        "description": "Confirmed real near-duplicate. Above high_confidence_similarity (0.90) — accepted on semantic score alone, no lexical support required.",
+        "score": 0.9276,
+        "tier": "high_confidence",
+        "decision": "accepted",
+        "shared_discriminative_terms": []
+      },
+      {
+        "query_source": "issue:5755",
+        "target": "issue:5863",
+        "description": "'Flask cannot find /security/logic API' vs 'Modern CSRF Protection Using Sec-Fetch-Site Header' — plausibly related through a shared security-protection subject. Medium-confidence band; accepted because 'security' is a genuine shared discriminative term (not corpus-generic — measured document frequency 4.0% in the demo corpus, well under the 10% generic cutoff).",
+        "score": 0.7077,
+        "tier": "medium_confidence",
+        "decision": "accepted",
+        "shared_discriminative_terms": ["security"]
+      },
+      {
+        "query_source": "issue:5755",
+        "target": "issue:5942",
+        "description": "'Flask cannot find /security/logic API' vs 'flask run should support pep723' (an unrelated packaging/tooling request) — the reported false positive. Medium-confidence band; rejected because the two issues share zero discriminative terms (only the corpus-generic word 'flask' overlaps, which does not count as support).",
+        "score": 0.7404,
+        "tier": "medium_confidence",
+        "decision": "rejected",
+        "shared_discriminative_terms": []
+      },
+      {
+        "query_source": "issue:5755",
+        "target": "issue:5804",
+        "description": "'Flask cannot find /security/logic API' vs '3.1.2 regression: stream_with_context triggers teardown_request() calls before response generation' — a completely unrelated request-lifecycle bug. A second false positive caught during THIS correction's own live verification: an earlier, incomplete draft of the corpus-generic term list omitted 'environment' and 'version' despite both measuring above the 10% document-frequency cutoff, so #5804 was briefly accepted on nothing but shared bug-report-template boilerplate ('Environment for Airflow 2.8.4' / 'Python version: 3.10' appears near-verbatim in nearly every issue in this corpus). Fixed by completing the generic-term list to match its own documented cutoff; #5804 now correctly shares zero discriminative terms with #5755.",
+        "score": 0.6965,
+        "tier": "medium_confidence",
+        "decision": "rejected",
+        "shared_discriminative_terms": []
+      },
+      {
+        "query_source": "issue:5755",
+        "target": "issue:5836",
+        "description": "'Flask cannot find /security/logic API' vs 'Test failures with click 8.3.1' — an unrelated dependency-version test-failure report. A third false positive caught during this correction's own live verification: 'using' (a common gerund of 'to use') measured only 5.7% document frequency in the demo corpus, below the 10% corpus-generic cutoff, yet still carries no discriminative concept on its own in any corpus. Fixed by adding a small, bounded, general (not corpus-frequency-derived) low-content-word set covering personal pronouns, modal verbs, and hedge adverbs alongside the corpus-measured generic terms (see app.retrieval.query_terms._LOW_CONTENT_TERMS); #5836 now correctly shares zero discriminative terms with #5755.",
+        "score": 0.6927,
+        "tier": "medium_confidence",
+        "decision": "rejected",
+        "shared_discriminative_terms": []
+      }
+    ]
+  },
+  "corpus_generic_terms_measurement": {
+    "_comment": "Document frequency of each generic term across the demo corpus's 405 retrieval_chunks, measured 2026-09-15, and of a few genuinely topical words kept for comparison (not excluded). extract_discriminative_terms excludes every term at or above 10% document frequency, plus 'issue'/'project' by explicit domain-generic addendum (see app.retrieval.query_terms for the full rationale) — both measured well under 10% here precisely because chunk body text rarely spells out the word describing itself. 'environment' and 'version' are included here deliberately: an earlier, incomplete draft of this list omitted them despite both measuring above the 10% cutoff, and live verification caught the resulting false positive (issue #5804 accepted for #5755 on nothing but shared bug-report-template boilerplate) before this correction shipped.",
+    "excluded_as_generic": {
+      "flask": 0.536, "app": 0.262, "python": 0.237, "py": 0.210,
+      "request": 0.175, "test": 0.148, "file": 0.143, "code": 0.114,
+      "context": 0.111, "def": 0.111, "import": 0.111, "return": 0.111,
+      "http": 0.109, "when": 0.109, "environment": 0.106, "version": 0.106,
+      "run": 0.104, "site": 0.104, "response": 0.101,
+      "issue": 0.059, "project": 0.020
+    },
+    "kept_as_discriminative_for_comparison": {
+      "session": 0.052, "api": 0.054, "security": 0.040, "redirect": 0.044,
+      "endpoint": 0.037, "login": 0.020, "protection": 0.015, "cookie": 0.005
+    }
+  },
+  "known_limitations": [
+    "issue<->issue separation is clean and well-supported: strongest measured negative 0.5750, weakest measured positive 0.9276 — a gap of about 0.35.",
+    "issue<->document separation is NOT clean: the one measured positive (0.6153) scores lower than the one measured negative (0.6239). No defensible document-specific threshold exists with this small sample. chosen_threshold=0.65 resolves this by excluding both measured document examples rather than guessing a document-specific cutoff — precision over recall for weak cross-genre matches.",
+    "A blanket lexical-overlap rule does not reliably resolve the ambiguous document pair either (see lexical_overlap_check) — this is why the medium-confidence rule requires *discriminative* terms specifically, and why high_confidence_similarity=0.90 was chosen high enough that no measured document example reaches it.",
+    "high_confidence_similarity=0.90 is provisional and based on a single confirmed near-duplicate pair (#5755/#5756) plus the two duplicate-title pairs (#6047/#6048, #6047/#6049) — more confirmed near-duplicate examples would strengthen this boundary.",
+    "The corpus-generic term list is derived from this specific 405-chunk demo corpus; a different or larger corpus would need its own document-frequency measurement (the 10% cutoff and the 'issue'/'project' addendum are the general, reusable parts of the rule).",
+    "Only a handful of issue<->document pairs total were measured — a small sample, not a statistically robust distribution. More issue<->document examples, ideally from a larger/more diverse document corpus, are needed before revisiting a document-specific threshold.",
+    "A full evaluation harness with recall/precision reporting on a larger fixed set is Milestone 2.5 scope and was not built here."
+  ]
+}

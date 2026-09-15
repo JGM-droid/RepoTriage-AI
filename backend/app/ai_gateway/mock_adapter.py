@@ -23,6 +23,13 @@ def call(request: AIRequest) -> AIResponse:
         f"Evidence considered: {evidence_summary}. "
         f"Proposed action: {request.proposed_action.action}"
     )
+    citations: tuple[str, ...] = ()
+    if request.retrieved_context:
+        citations = tuple(record.identifier for record in request.retrieved_context)
+        related = "; ".join(
+            f"{record.identifier} ({record.title})" for record in request.retrieved_context
+        )
+        narrative += f" Related repository evidence: {related}. [cites: {', '.join(citations)}]"
     return AIResponse(
         narrative=narrative,
         status=STATUS_SUCCEEDED,
@@ -33,4 +40,5 @@ def call(request: AIRequest) -> AIResponse:
         output_tokens=0,
         estimated_cost_usd=0.0,
         latency_ms=0.0,
+        citations=citations,
     )

@@ -1,0 +1,44 @@
+[
+  {
+    "path": "quickstart#a-minimal-application",
+    "title": "Quickstart: A Minimal Application",
+    "source_url": "https://flask.palletsprojects.com/en/stable/quickstart/#a-minimal-application",
+    "license_note": "Paraphrased summary; see source_url for Pallets' original documentation (BSD-3-Clause, Copyright 2010 Pallets).",
+    "content": "A minimal Flask app creates a Flask instance from the module name, then uses the route decorator to bind a URL to a view function that returns the response body. The app should not be named flask.py, since that would collide with the Flask package itself. It runs via the flask command with the --app option, or automatically if the file is named app.py or wsgi.py, starting a simple development server not intended for production use."
+  },
+  {
+    "path": "quickstart#variable-rules",
+    "title": "Quickstart: Routing and Variable Rules",
+    "source_url": "https://flask.palletsprojects.com/en/stable/quickstart/#variable-rules",
+    "license_note": "Paraphrased summary; see source_url for Pallets' original documentation (BSD-3-Clause, Copyright 2010 Pallets).",
+    "content": "Routes can include variable sections marked with angle brackets, such as <username>, which are passed to the view function as keyword arguments. A converter prefix like <int:post_id> or <path:subpath> restricts and converts the matched value before the view runs; available converters include string (default), int, float, path, and uuid."
+  },
+  {
+    "path": "quickstart#debug-mode",
+    "title": "Quickstart: Debug Mode",
+    "source_url": "https://flask.palletsprojects.com/en/stable/quickstart/#debug-mode",
+    "license_note": "Paraphrased summary; see source_url for Pallets' original documentation (BSD-3-Clause, Copyright 2010 Pallets).",
+    "content": "Debug mode, enabled with the --debug flag on flask run, makes the development server reload automatically when code changes and shows an interactive in-browser debugger on unhandled errors. The debugger can execute arbitrary Python code from the browser and is protected only by a PIN, so it and the development server must never be enabled in a production environment."
+  },
+  {
+    "path": "quickstart#sessions",
+    "title": "Quickstart: Sessions",
+    "source_url": "https://flask.palletsprojects.com/en/stable/quickstart/#sessions",
+    "license_note": "Paraphrased summary; see source_url for Pallets' original documentation (BSD-3-Clause, Copyright 2010 Pallets).",
+    "content": "The session object stores per-user data across requests on top of cookies, cryptographically signed so a client can read but not modify its contents without the app's secret key. A random secret key must be configured (for example via Flask.secret_key) before sessions can be used; client-side cookie sessions are the default, but extensions exist for server-side session storage."
+  },
+  {
+    "path": "quickstart#apis-with-json",
+    "title": "Quickstart: APIs with JSON",
+    "source_url": "https://flask.palletsprojects.com/en/stable/quickstart/#apis-with-json",
+    "license_note": "Paraphrased summary; see source_url for Pallets' original documentation (BSD-3-Clause, Copyright 2010 Pallets).",
+    "content": "Returning a dict or list directly from a view function automatically produces a JSON response via jsonify(), which serializes any supported JSON-compatible data type. Complex types such as database model instances are not JSON serializable on their own and typically need a serialization library to convert them to plain dicts or lists first."
+  },
+  {
+    "path": "quickstart#file-uploads",
+    "title": "Quickstart: File Uploads",
+    "source_url": "https://flask.palletsprojects.com/en/stable/quickstart/#file-uploads",
+    "license_note": "Paraphrased summary; see source_url for Pallets' original documentation (BSD-3-Clause, Copyright 2010 Pallets).",
+    "content": "Uploaded files are available on the request.files mapping and behave like standard file objects, with an added save() method to write them to the server's filesystem. An HTML form must set enctype=\"multipart/form-data\" or the browser will not transmit files at all; a client-supplied filename should never be trusted directly and should be passed through Werkzeug's secure_filename() before being used to build a filesystem path."
+  }
+]

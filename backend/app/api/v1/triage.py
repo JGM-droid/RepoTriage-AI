@@ -83,9 +83,10 @@ def _triage_result_from_analysis(session: Session, analysis: Analysis) -> Triage
         evidence=content["evidence"] if content else [],
         assessment=content["assessment"] if content else None,
         proposed_action=content["proposed_action"] if content else None,
-        # .get, not [] — a recommendation created before Milestone 2.2 has
-        # no "ai_inference" key in its stored content; treat that as absent
-        # rather than a lookup error.
+        # .get, not [] — a recommendation created before Milestone 2.2/2.3
+        # has no "ai_inference"/"retrieved_evidence" key in its stored
+        # content; treat that as absent rather than a lookup error.
+        retrieved_evidence=content.get("retrieved_evidence") if content else None,
         ai_inference=content.get("ai_inference") if content else None,
         human_review=(
             _human_review_for_recommendation(session, recommendation) if recommendation else None

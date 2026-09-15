@@ -148,6 +148,31 @@ class TriageAIInference(BaseModel):
     output_tokens: int
     estimated_cost_usd: float
     fallback_reason: str | None = None
+    citations: list[str] = Field(default_factory=list)
+
+
+class TriageRetrievedRecord(BaseModel):
+    identifier: str
+    source_type: str
+    external_number: int | None
+    title: str
+    excerpt: str
+    source_url: str
+    similarity_score: float
+    relevance_explanation: str
+
+
+class TriageRetrievedEvidence(BaseModel):
+    """Repository-grounded evidence retrieved for this analysis (Milestone
+    2.3) — structurally separate from the selected issue's own `evidence`
+    and from the AI-generated narrative; it only ever enriches the latter's
+    prompt, never the deterministic sections."""
+
+    items: list[TriageRetrievedRecord]
+    query_summary: str
+    candidates_considered: int
+    status: str
+    failure_reason: str | None = None
 
 
 class TriageHumanReview(BaseModel):
@@ -187,6 +212,7 @@ class TriageResult(BaseModel):
     evidence: list[TriageEvidenceItem]
     assessment: TriageAssessment | None
     proposed_action: TriageProposedAction | None
+    retrieved_evidence: TriageRetrievedEvidence | None = None
     ai_inference: TriageAIInference | None = None
     human_review: TriageHumanReview | None
     status_history: list[TriageStatusEvent]

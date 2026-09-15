@@ -60,6 +60,26 @@ export type TriageAIInference = {
   output_tokens: number;
   estimated_cost_usd: number;
   fallback_reason: string | null;
+  citations: string[];
+};
+
+export type TriageRetrievedRecord = {
+  identifier: string;
+  source_type: "issue" | "document";
+  external_number: number | null;
+  title: string;
+  excerpt: string;
+  source_url: string;
+  similarity_score: number;
+  relevance_explanation: string;
+};
+
+export type TriageRetrievedEvidence = {
+  items: TriageRetrievedRecord[];
+  query_summary: string;
+  candidates_considered: number;
+  status: "ok" | "empty" | "insufficient_query" | "failed";
+  failure_reason: string | null;
 };
 
 export type TriageDecision = "approve" | "reject" | "request_revision";
@@ -104,6 +124,7 @@ export type TriageResult = {
   evidence: TriageEvidenceItem[];
   assessment: TriageAssessment | null;
   proposed_action: TriageProposedAction | null;
+  retrieved_evidence: TriageRetrievedEvidence | null;
   ai_inference: TriageAIInference | null;
   human_review: TriageHumanReview | null;
   status_history: TriageStatusEvent[];

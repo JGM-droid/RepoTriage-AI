@@ -8,8 +8,9 @@ returned to the router's caller.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from app.retrieval.contracts import RetrievedRecord
 from app.triage.rules import Assessment, Classification, EvidenceItem, ProposedAction
 
 PROMPT_NAME = "triage_narrative_v1"
@@ -21,24 +22,40 @@ _VALID_STATUSES = (STATUS_SUCCEEDED, STATUS_FALLBACK)
 
 @dataclass(frozen=True)
 class AIRequest:
-    """The bounded input sent to an AI provider adapter for one analysis."""
+    """The bounded input sent to an AI provider adapter for one analysis.
+
+    `retrieved_context` carries only the already-selected, already-bounded
+    top-k `RetrievedRecord`s chosen by the `retrieve_related_evidence`
+    stage (see `app.retrieval`) — never the full corpus, and never a second
+    copy of the issue being analyzed (the retrieval stage excludes it)."""
 
     task: str
     classification: Classification
     evidence: tuple[EvidenceItem, ...]
     assessment: Assessment
     proposed_action: ProposedAction
+    retrieved_context: tuple[RetrievedRecord, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.task:
             raise ValueError("AIRequest.task must not be empty.")
         if not isinstance(self.evidence, tuple):
             raise TypeError("AIRequest.evidence must be a tuple of EvidenceItem.")
+        if not isinstance(self.retrieved_context, tuple):
+            raise TypeError("AIRequest.retrieved_context must be a tuple of RetrievedRecord.")
+
+    def allowed_citation_identifiers(self) -> frozenset[str]:
+        return frozenset(record.identifier for record in self.retrieved_context)
 
 
 @dataclass(frozen=True)
 class AIResponse:
-    """The validated result of one AI-gateway call: real, mock, or fallback."""
+    """The validated result of one AI-gateway call: real, mock, or fallback.
+
+    `citations` may only reference identifiers that were actually present
+    in the request's `retrieved_context` — validated by
+    `validate_citations` before an `AIResponse` referencing them is ever
+    constructed from adapter output."""
 
     narrative: str
     status: str
@@ -50,6 +67,7 @@ class AIResponse:
     estimated_cost_usd: float
     latency_ms: float
     fallback_reason: str | None = None
+    citations: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         if not self.narrative or not self.narrative.strip():
@@ -62,6 +80,19 @@ class AIResponse:
             raise ValueError("AIResponse.estimated_cost_usd must not be negative.")
         if self.latency_ms < 0:
             raise ValueError("AIResponse.latency_ms must not be negative.")
+
+
+class InvalidCitationError(RuntimeError):
+    """A provider response cited an identifier not present in the supplied
+    `retrieved_context`. Treated as a controlled provider failure (like a
+    malformed response) by the router, never persisted as-is."""
+
+
+def validate_citations(citations: tuple[str, ...], request: AIRequest) -> None:
+    allowed = request.allowed_citation_identifiers()
+    unknown = [citation for citation in citations if citation not in allowed]
+    if unknown:
+        raise InvalidCitationError(f"unknown citation identifier(s): {unknown!r}")
 
 
 class AIGatewayConfigurationError(RuntimeError):

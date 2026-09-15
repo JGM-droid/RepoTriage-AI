@@ -1,3 +1,4 @@
+import json
 import os
 from collections.abc import Iterator
 from uuid import uuid4
@@ -10,7 +11,7 @@ from sqlalchemy.orm import Session
 import app.workflow.tasks as workflow_tasks
 from app.api.v1.triage import get_triage_session
 from app.main import app
-from app.models.core import Analysis, Issue, Repository
+from app.models.core import Analysis, Issue, Recommendation, Repository
 from app.triage.service import status_history
 
 TRUNCATE_CORE_TABLES = (
@@ -122,10 +123,17 @@ def test_polling_after_start_returns_the_completed_result_with_separated_section
         "retrieve_fixture_evidence",
         "assess",
         "propose",
+        "retrieve_related_evidence",
         "ai_inference",
         "human_review",
     ]
     assert all(attempt["status"] == "succeeded" for attempt in payload["stage_attempts"])
+
+    # No other issues exist in this isolated test database, so retrieval
+    # explicitly finds nothing — a valid, non-error outcome, distinct from
+    # both "not run yet" and a failure.
+    assert payload["retrieved_evidence"]["status"] == "empty"
+    assert payload["retrieved_evidence"]["items"] == []
 
     # The AI-generated narrative supplements, but never replaces, the
     # deterministic sections above; the default demo/test provider is the
@@ -135,6 +143,49 @@ def test_polling_after_start_returns_the_completed_result_with_separated_section
     assert payload["ai_inference"]["input_tokens"] == 0
     assert payload["ai_inference"]["estimated_cost_usd"] == 0.0
     assert payload["ai_inference"]["narrative"]
+    assert payload["ai_inference"]["citations"] == []
+
+
+def test_get_triage_is_backward_compatible_with_pre_2_3_recommendations(
+    client: TestClient, database_session: Session
+) -> None:
+    """A recommendation written before Milestone 2.3 has no
+    "retrieved_evidence" key in its stored content at all — the API must
+    treat that as absent, not crash."""
+    issue = add_issue(database_session)
+    analysis = Analysis(issue_id=issue.id, status="completed")
+    database_session.add(analysis)
+    database_session.commit()
+    pre_2_3_content = {
+        "ruleset_version": "1.0",
+        "classification": {
+            "label": "bug-crash",
+            "matched_rule": "crash-keyword",
+            "matched_keywords": ["crash"],
+        },
+        "evidence": [],
+        "assessment": {"severity": "high", "rationale": "r"},
+        "proposed_action": {"action": "a", "rationale": "r"},
+        "human_review": {
+            "recommendation_status": "proposed",
+            "human_review_status": "awaiting_human_review",
+            "decision": None,
+        },
+    }
+    database_session.add(
+        Recommendation(
+            analysis_id=analysis.id, status="proposed", content=json.dumps(pre_2_3_content)
+        )
+    )
+    database_session.commit()
+
+    response = client.get(f"/api/v1/issues/{issue.id}/triage")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["retrieved_evidence"] is None
+    assert payload["ai_inference"] is None
+    assert payload["classification"]["label"] == "bug-crash"  # deterministic sections unaffected
 
 
 def test_get_triage_returns_stable_not_found_when_no_triage_has_run(

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from app.ai_gateway.contracts import AIRequest, AIResponse
 from app.ai_gateway.router import route_ai_inference
+from app.retrieval.contracts import RetrievedRecord
 from app.triage.rules import Assessment, Classification, EvidenceItem, ProposedAction
 
 AI_INFERENCE_TASK_NAME = "triage_narrative"
@@ -22,6 +23,7 @@ def run_ai_inference_stage(
     evidence: tuple[EvidenceItem, ...],
     assessment: Assessment,
     proposed_action: ProposedAction,
+    retrieved_context: tuple[RetrievedRecord, ...] = (),
 ) -> AIResponse:
     del issue  # the request below carries only the already-gathered fields
     request = AIRequest(
@@ -30,5 +32,6 @@ def run_ai_inference_stage(
         evidence=evidence,
         assessment=assessment,
         proposed_action=proposed_action,
+        retrieved_context=retrieved_context,
     )
     return route_ai_inference(request)

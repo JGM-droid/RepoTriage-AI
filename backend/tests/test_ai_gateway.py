@@ -18,8 +18,10 @@ from app.ai_gateway.contracts import (
     AIRequest,
     AIResponse,
     ProviderCallFailed,
+    validate_citations,
 )
 from app.config import Settings
+from app.retrieval.contracts import RetrievedRecord
 from app.triage.rules import Assessment, Classification, EvidenceItem, ProposedAction
 
 CLASSIFICATION = Classification(
@@ -34,15 +36,28 @@ ASSESSMENT = Assessment(severity="high", rationale="Matched rule 'crash-keyword'
 PROPOSED_ACTION = ProposedAction(
     action="Prioritize for immediate triage.", rationale="Derived from classification."
 )
+RETRIEVED_RECORD = RetrievedRecord(
+    identifier="issue:5756",
+    source_type="issue",
+    external_number=5756,
+    title="404 Flask cannot find /security/login API",
+    excerpt="A related closed issue about a missing security endpoint.",
+    source_url="https://github.com/pallets/flask/issues/5756",
+    similarity_score=0.87,
+    relevance_explanation="Ranked as a related resolved issue with cosine similarity 0.870.",
+    embedding_model="fake-hash-embedder",
+    embedding_version="1",
+)
 
 
-def make_request(task: str = "triage_narrative") -> AIRequest:
+def make_request(task: str = "triage_narrative", retrieved_context: tuple = ()) -> AIRequest:
     return AIRequest(
         task=task,
         classification=CLASSIFICATION,
         evidence=EVIDENCE,
         assessment=ASSESSMENT,
         proposed_action=PROPOSED_ACTION,
+        retrieved_context=retrieved_context,
     )
 
 
@@ -296,3 +311,103 @@ def test_router_configuration_error_is_never_turned_into_a_fallback(
 
     with pytest.raises(AIGatewayConfigurationError):
         router.route_ai_inference(make_request(), settings)
+
+
+# --- citations (Milestone 2.3) ---------------------------------------------
+
+
+def test_ai_request_only_accepts_a_tuple_for_retrieved_context() -> None:
+    with pytest.raises(TypeError):
+        AIRequest(
+            task="triage_narrative",
+            classification=CLASSIFICATION,
+            evidence=EVIDENCE,
+            assessment=ASSESSMENT,
+            proposed_action=PROPOSED_ACTION,
+            retrieved_context=[RETRIEVED_RECORD],  # type: ignore[arg-type]
+        )
+
+
+def test_mock_adapter_produces_deterministic_structural_citations_when_evidence_is_retrieved() -> (
+    None
+):
+    request = make_request(retrieved_context=(RETRIEVED_RECORD,))
+
+    first = mock_adapter.call(request)
+    second = mock_adapter.call(request)
+
+    assert first == second
+    assert first.citations == ("issue:5756",)
+    assert "issue:5756" in first.narrative
+
+
+def test_mock_adapter_produces_no_citations_when_nothing_was_retrieved() -> None:
+    result = mock_adapter.call(make_request())
+    assert result.citations == ()
+
+
+def test_validate_citations_accepts_identifiers_present_in_the_request() -> None:
+    request = make_request(retrieved_context=(RETRIEVED_RECORD,))
+    validate_citations(("issue:5756",), request)  # must not raise
+
+
+def test_validate_citations_rejects_an_unknown_identifier() -> None:
+    from app.ai_gateway.contracts import InvalidCitationError
+
+    request = make_request(retrieved_context=(RETRIEVED_RECORD,))
+    with pytest.raises(InvalidCitationError):
+        validate_citations(("issue:99999-invented",), request)
+
+
+def test_openai_adapter_accepts_a_response_that_cites_only_supplied_identifiers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        openai_adapter.httpx,
+        "post",
+        lambda *args, **kwargs: _openai_response(
+            content="Related to a known security endpoint issue.\nCitations: issue:5756"
+        ),
+    )
+    settings = make_settings(ai_provider="openai", openai_api_key="sk-test")
+    request = make_request(retrieved_context=(RETRIEVED_RECORD,))
+
+    result = openai_adapter.call(request, settings)
+
+    assert result.citations == ("issue:5756",)
+    assert "Citations:" not in result.narrative  # the machine-readable line is stripped
+
+
+def test_openai_adapter_rejects_an_invented_citation_as_a_controlled_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        openai_adapter.httpx,
+        "post",
+        lambda *args, **kwargs: _openai_response(
+            content="A narrative.\nCitations: issue:99999-invented"
+        ),
+    )
+    settings = make_settings(ai_provider="openai", openai_api_key="sk-test")
+    request = make_request(retrieved_context=(RETRIEVED_RECORD,))
+
+    with pytest.raises(ProviderCallFailed):
+        openai_adapter.call(request, settings)
+
+
+def test_router_falls_back_on_an_invented_citation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        openai_adapter.httpx,
+        "post",
+        lambda *args, **kwargs: _openai_response(
+            content="A narrative.\nCitations: issue:99999-invented"
+        ),
+    )
+    settings = make_settings(ai_provider="openai", openai_api_key="sk-test")
+    request = make_request(retrieved_context=(RETRIEVED_RECORD,))
+
+    result = router.route_ai_inference(request, settings)
+
+    assert result.status == STATUS_FALLBACK
+    assert result.provider == "mock"
+    assert result.fallback_reason is not None and "invalid_citation" in result.fallback_reason

@@ -1,0 +1,13 @@
+{
+  "captured_at": "2026-09-16T00:00:00Z",
+  "content_checksum": "f5081fac5c66e903005288c696acb437334605b2f27183e58ec9ac704caadc64",
+  "content_checksum_algorithm": "sha256",
+  "fixture_format_version": "1.0",
+  "document_count": 6,
+  "repository_source_url": "https://github.com/pallets/flask",
+  "source_provider": "flask-docs",
+  "source_repository": "pallets/flask",
+  "license": "BSD-3-Clause",
+  "attribution": "Original short summaries paraphrased from Flask's official documentation (https://flask.palletsprojects.com/en/stable/), Copyright 2010 Pallets, BSD-3-Clause licensed. Each entry's source_url links to the exact original section; content here is an independent paraphrase, not a verbatim reproduction.",
+  "selection_rules": "A small, hand-selected set of Quickstart documentation sections (minimal application, routing/variable rules, debug mode, sessions, JSON APIs, file uploads) chosen for thematic overlap with the paired issue fixture; not a full crawl of the repository or its documentation."
+}

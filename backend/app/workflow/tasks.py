@@ -1,11 +1,15 @@
 """Celery task and durable orchestration for the deterministic triage workflow.
 
 Executes classify -> retrieve_fixture_evidence -> assess -> propose ->
-ai_inference -> human_review in a background worker (Milestone 2.1;
-`ai_inference` added in Milestone 2.2, see ADR 0008) instead of inside the
-HTTP request. `ai_inference` supplements the deterministic classification,
-severity, and proposed action with an AI-generated narrative grounded in
-the same evidence — it never changes them, and it never creates a
+retrieve_related_evidence -> ai_inference -> human_review in a background
+worker (Milestone 2.1; `ai_inference` added in Milestone 2.2, see ADR 0008;
+`retrieve_related_evidence` added in Milestone 2.3, see ADR 0009) instead
+of inside the HTTP request. `retrieve_related_evidence` looks up bounded,
+same-repository, resolved evidence (via pgvector) and hands only its
+selected top results to `ai_inference`; `ai_inference` supplements the
+deterministic classification, severity, and proposed action with an
+AI-generated narrative grounded in that evidence — neither stage ever
+changes classification/severity/proposed_action, and neither creates a
 `HumanDecision`. PostgreSQL persists the workflow-run (`Analysis`) status,
 current stage, attempt count, and one `StageAttempt` row per stage attempt
 (including that stage's deterministic output), so a crashed or re-delivered
@@ -34,6 +38,8 @@ from app.ai_gateway.stage import run_ai_inference_stage
 from app.config import get_settings
 from app.database import SessionLocal
 from app.models.core import Analysis, AuditEvent, Issue, Recommendation, StageAttempt
+from app.retrieval.contracts import RetrievalResult, RetrievedRecord
+from app.retrieval.stage import run_retrieve_related_evidence_stage
 from app.triage.rules import (
     TRIAGE_RULESET_VERSION,
     Assessment,
@@ -54,12 +60,14 @@ STAGE_ORDER = (
     "retrieve_fixture_evidence",
     "assess",
     "propose",
+    "retrieve_related_evidence",
     "ai_inference",
     "human_review",
 )
 TERMINAL_STATUSES = ("completed", "failed", "timed_out")
 _STATUS_EVENT_TYPE = "triage_status_transition"
 _AI_ROUTING_EVENT_TYPE = "ai_inference_routing"
+_RETRIEVAL_EVENT_TYPE = "retrieval_evidence"
 
 settings = get_settings()
 
@@ -132,6 +140,16 @@ def _deserialize_stage_output(stage: str, raw: str) -> object:
         return Assessment(**data)
     if stage == "propose":
         return ProposedAction(**data)
+    if stage == "retrieve_related_evidence":
+        return RetrievalResult(
+            items=tuple(RetrievedRecord(**item) for item in data["items"]),
+            query_summary=data["query_summary"],
+            candidates_considered=data["candidates_considered"],
+            total_excerpt_chars=data["total_excerpt_chars"],
+            mechanism=data["mechanism"],
+            status=data["status"],
+            failure_reason=data.get("failure_reason"),
+        )
     if stage == "ai_inference":
         return AIResponse(**data)
     if stage == "human_review":
@@ -186,7 +204,9 @@ def _run_stage(session, analysis, stage, attempt_number, func, *args):
     return result
 
 
-def _serialize_content(classification, evidence, assessment, proposal, ai_response, review) -> str:
+def _serialize_content(
+    classification, evidence, assessment, proposal, retrieval_result, ai_response, review
+) -> str:
     return json.dumps(
         {
             "ruleset_version": TRIAGE_RULESET_VERSION,
@@ -194,6 +214,7 @@ def _serialize_content(classification, evidence, assessment, proposal, ai_respon
             "evidence": [asdict(item) for item in evidence],
             "assessment": asdict(assessment),
             "proposed_action": asdict(proposal),
+            "retrieved_evidence": asdict(retrieval_result),
             "ai_inference": asdict(ai_response),
             "human_review": asdict(review),
         }
@@ -225,6 +246,41 @@ def _record_ai_routing_event(
                 "model": ai_response.model,
                 "status": ai_response.status,
                 "fallback_reason": ai_response.fallback_reason,
+            },
+        )
+    )
+    session.commit()
+
+
+def _record_retrieval_event(
+    session: Session,
+    issue: Issue,
+    analysis: Analysis,
+    attempt_number: int,
+    retrieval_result: RetrievalResult,
+) -> None:
+    """Record the retrieval decision: mechanism, candidate/selected counts,
+    context size, and which sources were actually selected — identifiers
+    only, never full excerpts/bodies. Only called when this attempt's
+    `retrieve_related_evidence` stage actually executed fresh (mirrors
+    `_record_ai_routing_event`'s resume-safety), so redelivery never
+    duplicates this event."""
+    session.add(
+        AuditEvent(
+            repository_id=issue.repository_id,
+            issue_id=issue.id,
+            event_type=_RETRIEVAL_EVENT_TYPE,
+            metadata_={
+                "analysis_id": str(analysis.id),
+                "attempt_number": attempt_number,
+                "repository_id": str(issue.repository_id),
+                "mechanism": retrieval_result.mechanism,
+                "candidates_considered": retrieval_result.candidates_considered,
+                "selected_count": len(retrieval_result.items),
+                "total_excerpt_chars": retrieval_result.total_excerpt_chars,
+                "selected_identifiers": [item.identifier for item in retrieval_result.items],
+                "status": retrieval_result.status,
+                "failure_reason": retrieval_result.failure_reason,
             },
         )
     )
@@ -278,11 +334,30 @@ def process_workflow_run(session: Session, analysis_id: UUID) -> Analysis:
         proposal = _run_stage(
             session, analysis, "propose", attempt_number, propose, issue, classification, assessment
         )
-        # Detected before `_run_stage` runs, so the routing/fallback audit
-        # event below is written only when this attempt genuinely called
-        # the provider (or mock) fresh — never duplicated on a resumed or
-        # re-delivered task, whose `ai_inference` stage is already
-        # `succeeded` and gets skipped entirely by `_run_stage`.
+        # Detected before `_run_stage` runs, so each audit event below is
+        # written only when this attempt genuinely executed that stage
+        # fresh — never duplicated on a resumed or re-delivered task, whose
+        # stage is already `succeeded` and gets skipped entirely by
+        # `_run_stage`.
+        retrieval_already_succeeded = (
+            _existing_succeeded_attempt(
+                session, analysis, "retrieve_related_evidence", attempt_number
+            )
+            is not None
+        )
+        retrieval_result = _run_stage(
+            session,
+            analysis,
+            "retrieve_related_evidence",
+            attempt_number,
+            run_retrieve_related_evidence_stage,
+            session,
+            issue,
+            classification,
+        )
+        if not retrieval_already_succeeded:
+            _record_retrieval_event(session, issue, analysis, attempt_number, retrieval_result)
+
         ai_stage_already_succeeded = (
             _existing_succeeded_attempt(session, analysis, "ai_inference", attempt_number)
             is not None
@@ -298,6 +373,7 @@ def process_workflow_run(session: Session, analysis_id: UUID) -> Analysis:
             evidence,
             assessment,
             proposal,
+            retrieval_result.items,
         )
         if not ai_stage_already_succeeded:
             _record_ai_routing_event(session, issue, analysis, attempt_number, ai_response)
@@ -326,7 +402,7 @@ def process_workflow_run(session: Session, analysis_id: UUID) -> Analysis:
         analysis_id=analysis.id,
         status=review.recommendation_status,
         content=_serialize_content(
-            classification, evidence, assessment, proposal, ai_response, review
+            classification, evidence, assessment, proposal, retrieval_result, ai_response, review
         ),
     )
     session.add(recommendation)

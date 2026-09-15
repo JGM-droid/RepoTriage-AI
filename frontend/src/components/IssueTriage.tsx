@@ -114,6 +114,34 @@ export function IssueTriage({
             <p>{result.proposed_action?.rationale}</p>
           </div>
 
+          {result.retrieved_evidence ? (
+            <div className="retrieved-evidence">
+              <h4>Related repository evidence</h4>
+              {result.retrieved_evidence.items.length === 0 ? (
+                <p role="status">
+                  No related resolved issues or documentation were found in this repository for
+                  this issue.
+                </p>
+              ) : (
+                <ul>
+                  {result.retrieved_evidence.items.map((item) => (
+                    <li key={item.identifier}>
+                      <strong>
+                        {item.source_type === "issue" ? `Issue #${item.external_number}` : "Doc"}:{" "}
+                        {item.title}
+                      </strong>
+                      <p>{item.excerpt}</p>
+                      <p className="retrieved-evidence-relevance">
+                        {item.relevance_explanation}
+                      </p>
+                      <a href={item.source_url}>{item.source_url}</a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : null}
+
           {result.ai_inference ? (
             <div className="ai-inference">
               <h4>AI-generated inference</h4>
@@ -122,6 +150,11 @@ export function IssueTriage({
                 classification, severity, proposed action, or evidence.
               </p>
               <p>{result.ai_inference.narrative}</p>
+              {result.ai_inference.citations.length > 0 ? (
+                <p className="ai-inference-citations">
+                  Cites: {result.ai_inference.citations.join(", ")}
+                </p>
+              ) : null}
               <p className="ai-inference-provenance">
                 Provider: {result.ai_inference.provider} ({result.ai_inference.model})
                 {result.ai_inference.status === "fallback"

@@ -70,6 +70,24 @@ const completedTriageResponse = {
   evidence: [{ field: "title", excerpt: "CLI crashes on Windows", source_url: "https://github.com/pallets/flask/issues/101" }],
   assessment: { severity: "high", rationale: "Matched rule 'crash-keyword'." },
   proposed_action: { action: "Prioritize for immediate triage.", rationale: "Derived from classification." },
+  retrieved_evidence: {
+    items: [
+      {
+        identifier: "issue:5756",
+        source_type: "issue",
+        external_number: 5756,
+        title: "404 Flask cannot find /security/login API",
+        excerpt: "A related closed issue about a missing security endpoint.",
+        source_url: "https://github.com/pallets/flask/issues/5756",
+        similarity_score: 0.87,
+        relevance_explanation: "Ranked as a related resolved issue with cosine similarity 0.870.",
+      },
+    ],
+    query_summary: "top-3 match for: 'CLI crashes on Windows crash bug-crash high'",
+    candidates_considered: 12,
+    status: "ok",
+    failure_reason: null,
+  },
   ai_inference: {
     narrative: "Classified as 'bug-crash' with 'high' severity based on the stored evidence.",
     status: "succeeded",
@@ -80,6 +98,7 @@ const completedTriageResponse = {
     output_tokens: 0,
     estimated_cost_usd: 0,
     fallback_reason: null,
+    citations: ["issue:5756"],
   },
   human_review: {
     recommendation_status: "proposed",
@@ -385,14 +404,53 @@ describe("App", () => {
     expect(screen.getByText("Evidence")).toBeInTheDocument();
     expect(screen.getByText("System inference")).toBeInTheDocument();
     expect(screen.getByText("Proposed action")).toBeInTheDocument();
+    expect(screen.getByText("Related repository evidence")).toBeInTheDocument();
+    expect(screen.getByText("Issue #5756: 404 Flask cannot find /security/login API")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "https://github.com/pallets/flask/issues/5756" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("AI-generated inference")).toBeInTheDocument();
     expect(
       screen.getByText(completedTriageResponse.ai_inference.narrative),
     ).toBeInTheDocument();
+    expect(screen.getByText("Cites: issue:5756")).toBeInTheDocument();
     expect(screen.getByText("Provider: mock (deterministic-v1)", { exact: false })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Request revision" })).toBeInTheDocument();
+  });
+
+  it("shows an explicit no-related-evidence message when retrieval finds nothing", async () => {
+    const emptyRetrievalResponse = {
+      ...completedTriageResponse,
+      retrieved_evidence: {
+        items: [],
+        query_summary: "top-3 match for: 'an idiosyncratic issue with no overlap'",
+        candidates_considered: 12,
+        status: "empty",
+        failure_reason: null,
+      },
+      ai_inference: { ...completedTriageResponse.ai_inference, citations: [] },
+    };
+    vi.mocked(fetch)
+      .mockReturnValueOnce(jsonResponse(healthResponse))
+      .mockReturnValueOnce(jsonResponse(issueListResponse))
+      .mockReturnValueOnce(jsonResponse(issueDetailResponse))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
+      .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
+      .mockReturnValueOnce(jsonResponse(emptyRetrievalResponse));
+
+    render(<App />);
+    fireEvent.click(await findIssueButton("CLI crashes on Windows"));
+    await screen.findByText("No deterministic triage has been run for this issue yet.");
+    fireEvent.click(screen.getByRole("button", { name: "Run deterministic triage" }));
+
+    expect(await screen.findByText("Related repository evidence")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "No related resolved issues or documentation were found in this repository for this issue.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("clearly separates AI inference from the deterministic sections and shows fallback provenance", async () => {

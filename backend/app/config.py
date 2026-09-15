@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,7 +26,70 @@ class Settings(BaseSettings):
     openai_input_price_per_million_usd: float = 0.15
     openai_output_price_per_million_usd: float = 0.60
 
+    # Repository-grounded retrieval (Milestone 2.3). "local" (the default) is
+    # a real, local, CPU-only embedding model requiring no paid API call and
+    # no network access at runtime once its weights are baked into the
+    # image (see backend/Dockerfile). "fake" is a deterministic,
+    # hash-based embedder used only by the test suite, for speed and to
+    # keep tests independent of any model file.
+    embedding_provider: str = "local"
+    embedding_model_name: str = "BAAI/bge-small-en-v1.5"
+    embedding_model_version: str = "fastembed-0.8.0"
+    embedding_dimension: int = 384
+    embedding_cache_dir: str = "/app/.fastembed_cache"
+    retrieval_max_results: int = 3
+    retrieval_max_excerpt_chars: int = 320
+    # Below this cosine similarity, a candidate is not "relevant evidence" —
+    # it is excluded rather than forced into the top-k just because it was
+    # the best of a bad set. Recalibrated (see docs/adr/0009 and
+    # tests/test_retrieval_calibration.py) against the *production*
+    # build_query_text — issue title + bounded body excerpt + deduplicated
+    # matched keywords only, with generic severity/rationale/proposed-action
+    # boilerplate removed (that boilerplate previously homogenized every
+    # issue's query into the same narrow score range). With boilerplate
+    # removed, issue<->issue matching separates cleanly: measured negatives
+    # topped out at ~0.575, confirmed positives (including #5755/#5756)
+    # started at ~0.93. issue<->document matching is a different story: the
+    # one measured document negative (~0.62) scored *higher* than the one
+    # measured document positive (~0.62), an overlap a lexical-overlap check
+    # did not reliably resolve either — no defensible document-specific
+    # threshold exists yet with this small sample. 0.65 sits safely inside
+    # the confident issue<->issue gap and also happens to exclude both
+    # measured document examples, favoring missing a weak cross-genre match
+    # over presenting unsupported evidence.
+    retrieval_min_similarity: float = 0.65
+    # Two-band confidence model (see app.retrieval.service and ADR 0009),
+    # replacing an earlier narrow "close case" margin that only required
+    # lexical support in [0.65, 0.70). A live demo showed that band was too
+    # narrow: issue #5942 ("flask run should support pep723", an unrelated
+    # packaging request) scored 0.7404 against issue #5755 ("Flask cannot
+    # find /security/logic API") and cleared 0.70 on semantic score alone —
+    # a false positive. Below retrieval_min_similarity: rejected. From
+    # retrieval_min_similarity up to (not including) this threshold: "medium
+    # confidence" — requires at least one shared *discriminative* term (see
+    # app.retrieval.query_terms.extract_discriminative_terms, which strips
+    # both stop words and corpus-generic terms like "flask"/"python"/"code"
+    # so a match can't be manufactured from ubiquitous vocabulary). At or
+    # above this threshold: "high confidence" — semantic score alone
+    # qualifies, no lexical check needed. 0.90 is provisional, chosen
+    # because the confirmed near-duplicate #5755->#5756 measured at ~0.928
+    # (see tests/calibration/bge_similarity_calibration.json) — comfortably
+    # above 0.90 — while the false positive #5942 (0.7404) and the
+    # plausible-but-unconfirmed #5863 (0.7077, accepted only via its shared
+    # "security" term) both sit well below it.
+    retrieval_high_confidence_similarity: float = 0.90
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @model_validator(mode="after")
+    def _validate_retrieval_confidence_bands(self) -> "Settings":
+        if self.retrieval_high_confidence_similarity < self.retrieval_min_similarity:
+            raise ValueError(
+                "retrieval_high_confidence_similarity must be >= retrieval_min_similarity "
+                f"(got {self.retrieval_high_confidence_similarity} < "
+                f"{self.retrieval_min_similarity})."
+            )
+        return self
 
 
 @lru_cache
