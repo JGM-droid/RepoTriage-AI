@@ -12,7 +12,11 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17.7-alpine
+        # pgvector-enabled PostgreSQL 17, matching compose.yaml's pinned
+        # image exactly (Milestone 2.3, ADR 0009) -- migration 20260916_0004
+        # requires the vector extension, which the plain postgres image
+        # this service used before did not provide.
+        image: pgvector/pgvector:0.8.6-pg17-bookworm
         env:
           POSTGRES_DB: repotriage
           POSTGRES_USER: repotriage
@@ -51,6 +55,17 @@ jobs:
         env:
           DATABASE_URL: postgresql+psycopg://repotriage:repotriage@localhost:5432/repotriage
         run: pytest backend/tests
+      - name: Run evaluation regression gate
+        # Milestone 2.5 / ADR 0011. Deterministic and offline only: mock AI
+        # provider, no real retrieval model, no network, no API key, no
+        # paid call. Compares against the checked-in baseline
+        # (backend/tests/evaluation/baseline.json) and fails the job on any
+        # blocking regression; never updates the baseline.
+        working-directory: backend
+        env:
+          AI_PROVIDER: mock
+          EMBEDDING_PROVIDER: fake
+        run: python -m app.evaluation
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
