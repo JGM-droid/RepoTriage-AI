@@ -62,23 +62,63 @@ integrity check from ADR 0006), so a tampered or corrupted fixture fails loudly 
 silently ingesting bad data. Neither ingestion path makes a network call or touches the live
 GitHub API.
 
-### Retrieval query, ranking, and a minimum-relevance floor
+### Retrieval query, ranking, and a two-band confidence model
 
 `retrieve_related_evidence` filters strictly by `repository_id` (the enforceable boundary today;
 `Repository.tenant_id` exists for when Milestone 3.1 introduces real multi-tenant data) and
 excludes the analyzed issue's own chunks, ranks by pgvector cosine distance, deduplicates down to
 each source's single best-scoring chunk (so multiple adjacent chunks from one issue never crowd
-out other evidence), and returns at most 3 results (`retrieval_max_results`). A
-`retrieval_min_similarity` floor (default 0.35) excludes candidates that are not the best of a
-bad set — this was added after live demo testing showed that without a floor, a top-k cut alone
-always returns *something* once the corpus has hundreds of candidates, making "no relevant
-evidence found" reachable only in the degenerate zero-candidate case. **This floor is only
-loosely calibrated**: live testing against the real model showed even a maximally degenerate
-query (an issue titled and bodied `"."`) still scored ~0.69–0.70 against unrelated issues — well
-above 0.35 — while genuinely related pairs (a confirmed near-duplicate issue pair) scored
-~0.75–0.80. The mechanism is correct and tested against designed vectors; the exact cutoff for
-this specific model's real similarity distribution needs more empirical study than this milestone
-budgeted and is recorded as unproven, not swept under the rug.
+out other evidence), and returns at most 3 results (`retrieval_max_results`) as a **cap, never a
+quota** — fewer than 3 accepted candidates is a valid, expected outcome, and a rejected candidate
+is never backfilled in just to fill out the slate.
+
+**Superseded — historical only:** this ADR originally shipped with a single
+`retrieval_min_similarity` floor of **0.35** and, later, a narrow "close case" lexical margin of
+`[0.65, 0.70)`. Both were revised after implementation, through the normal correction/live-demo
+cycle this project uses rather than a full ADR rewrite at each step; this section now documents
+only the final, shipped decision. The `0.35` figure came from a query builder that embedded
+generic classification/severity/rationale/proposed-action boilerplate alongside the issue's own
+content, which homogenized similarity scores across unrelated issues and made a meaningful
+threshold impossible to set; the retrieval query was corrected to use only issue-specific content
+(normalized title, a bounded body excerpt, deduplicated matched keywords — the boilerplate fields
+remain unchanged and available to the later `ai_inference` stage, just never embedded into the
+retrieval query). The `[0.65, 0.70)` margin was too narrow in practice: a live demo surfaced issue
+#5942 (an unrelated packaging/tooling request) scoring 0.7404 against issue #5755 and bypassing
+lexical confirmation entirely by clearing that margin's 0.70 ceiling on semantic score alone — a
+real, observed false positive, not a hypothetical one.
+
+**Shipped decision — two confidence bands**, calibrated against the real corrected query builder,
+the real `BAAI/bge-small-en-v1.5` model, and this corpus (full evidence in
+`tests/calibration/bge_similarity_calibration.json`, which supersedes any threshold figure stated
+elsewhere in this ADR):
+
+- Below `retrieval_min_similarity` (**0.65**): rejected outright. Calibration: measured
+  issue<->issue negatives topped out at ~0.575 while confirmed positives (including the
+  near-duplicate #5755/#5756 pair) started at ~0.928 — a clean, defensible gap.
+- From 0.65 up to (not including) `retrieval_high_confidence_similarity` (**0.90**, "medium
+  confidence"): additionally requires at least one shared *discriminative* lexical term between
+  the query and the candidate chunk (`app.retrieval.query_terms.extract_discriminative_terms`).
+  This strips both stop words and two bounded, documented term sets that would otherwise let a
+  match be manufactured from vocabulary carrying no real subject-matter signal: corpus-generic,
+  high-document-frequency words measured directly against this corpus (e.g. "flask", "python",
+  "code", "environment", "version" — every term at or above 10% document frequency across the
+  405 retrieval chunks), and a small, general (not corpus-derived) set of low-content English
+  words — personal pronouns, modal verbs, and hedge adverbs (e.g. "we", "can", "using") — that
+  carry no discriminative concept in any corpus regardless of measured frequency. Both sets were
+  completed iteratively during this correction's own live verification against the real demo
+  corpus, which caught and fixed two further latent false positives (issues #5804 and #5836,
+  each briefly accepted on nothing but shared boilerplate/low-content vocabulary) before either
+  reached a real demo.
+- At or above 0.90 ("high confidence"): accepted on semantic score alone, no lexical check.
+  0.90 was chosen because the confirmed near-duplicate #5755/#5756 pair measures ~0.928,
+  comfortably above it, while every measured false positive sits well below it.
+
+**Known, accepted limitation — not force-fixed:** term-level lexical confirmation cannot fully
+resolve polysemy. Issue #6139 ("AI junk", a demo-corpus filler issue that genuinely discusses
+security vulnerabilities) is accepted for #5755 via the shared discriminative term "security" —
+a different sense of "security" than #5755's URL-path name (`/security/logic`). This was
+disclosed to and explicitly accepted by Jesse during Milestone 2.3 closeout rather than patched
+with an issue-specific exception, which this project's correction process deliberately avoids.
 
 ### Workflow placement
 
@@ -121,8 +161,11 @@ running image. Jesse's explicit approval for this implementation requires a genu
 embedding pipeline instead, accepting the added infrastructure (a different Postgres image, a new
 migration, a baked-in model) in exchange for real semantic grounding — validated live: an issue
 about a missing `/security/logic` endpoint correctly retrieved its actual near-duplicate
-(`/security/login`, cosine similarity 0.796) purely from real embeddings, something lexical
-overlap alone would not reliably generalize across. Full-text search (`pg_trgm`/`tsvector`, both
+(`/security/login`, cosine similarity 0.928 in the final calibrated implementation) purely from
+real embeddings, something lexical overlap alone would not reliably generalize across — though the
+final design does still use a bounded, deterministic lexical check as a secondary confirmation
+signal in the medium-confidence band (see "Retrieval query, ranking, and a two-band confidence
+model" above), not as the primary retrieval mechanism. Full-text search (`pg_trgm`/`tsvector`, both
 available in the pinned image without extra setup) remains available as a future secondary/hybrid
 aid, per the approved decision, but nothing in this milestone currently uses it — vector search
 alone met every requirement.
@@ -153,21 +196,42 @@ testing remains explicitly deferred to Milestone 2.6.
 Chunking determinism/bounds/dedup; fake-embedder determinism; idempotent issue and document
 ingestion (including a resolved-state filter and a tampered-manifest rejection); unchanged
 content is never re-embedded, changed content is; same-repository isolation; analyzed-issue
-exclusion; deterministic ranking and tie-breaking against designed vectors; top-k and
-minimum-similarity boundaries; per-source deduplication; explicit empty-result status; full
-provenance back to a stored `Issue`/`RepositoryDocument`; a dimension-mismatch failing clearly;
+exclusion; deterministic ranking and tie-breaking against designed vectors; the two-band
+confidence model itself — a candidate above the old, superseded 0.70 close-case ceiling no longer
+bypasses lexical confirmation; a high-confidence candidate (>=0.90) needs no lexical overlap; a
+medium-confidence candidate needs a shared *discriminative* term and generic/low-content terms
+alone cannot satisfy that requirement; top-3 is proven to be a cap, never a quota (fewer results
+returned without backfilling); per-source deduplication; explicit `ok`/`empty`/
+`insufficient_query`/`failed` status distinctions, including that a punctuation-only or otherwise
+non-informative query is rejected before any embedding call or database query; full provenance
+back to a stored `Issue`/`RepositoryDocument`; a dimension-mismatch failing clearly;
 workflow-level tests proving the stage's persisted output, its dedicated `retrieval_evidence`
-audit event, that a redelivered/resumed task never re-queries or re-embeds, and that a genuine
-retrieval failure degrades to an explicit empty result without blocking the workflow; AI-gateway
-tests proving valid citations are accepted, invented ones are rejected via controlled fallback,
-and the mock adapter cites deterministically; a live demo against the real model and the real
-demo database, with a real near-duplicate issue pair correctly retrieved and zero external network
-calls made.
+audit event (reflecting only accepted, never rejected, candidates), that a redelivered/resumed
+task never re-queries or re-embeds, and that a genuine retrieval failure degrades to an explicit
+empty result without blocking the workflow; AI-gateway tests proving valid citations are
+accepted, invented ones are rejected via controlled fallback, and the mock adapter cites
+deterministically; a frozen, versioned calibration fixture
+(`tests/calibration/bge_similarity_calibration.json`) recording the real measured scores behind
+both thresholds, including the specific false-positive regression examples (#5756 accepted,
+#5942/#5804/#5836 rejected, #5863 accepted via "security") that must not silently regress; a live
+demo against the real model and the real demo database — the actual persisted `Recommendation`
+for issue #5755, not a rehearsal — showing exactly the citations this calibration predicts, zero
+external network calls, and unchanged deterministic fields/human-review controls. Full backend
+suite: 217 passed against a fresh isolated pgvector PostgreSQL database (migration
+upgrade/downgrade/upgrade validated from an empty database); ruff clean. Jesse reviewed this
+demo and explicitly approved Milestone 2.3 and R2-03 as complete.
 
 ## Revisit conditions
 
-Revisit only through an explicitly approved ADR. Recalibrating `retrieval_min_similarity` against
-a wider empirical sample of this model's real similarity distribution should happen before this
-milestone is presented as fully proven. Any future switch to `pg_trgm`/full-text as a genuine
-hybrid signal, any RAG evaluation harness (Milestone 2.5), and any prompt-registry integration
-(Milestone 2.4) must build on the contracts here rather than replacing them ad hoc.
+Revisit only through an explicitly approved ADR. The minimum-similarity and high-confidence
+thresholds are now calibrated against the real, corrected query builder and a frozen evidence
+snapshot (see Testing/evidence above and `tests/calibration/bge_similarity_calibration.json`),
+superseding the "unproven" status this ADR originally recorded — but the calibration sample
+remains small (roughly a dozen measured pairs), and the issue<->document category specifically
+has no defensible dedicated threshold yet (the one measured document positive and negative
+overlap). A wider empirical sample, and the known #6139-style polysemy limitation (term-level
+lexical confirmation cannot distinguish different senses of the same word), are natural inputs to
+Milestone 2.5's evaluation harness rather than something to silently patch with issue-specific
+exceptions. Any future switch to `pg_trgm`/full-text as a genuine hybrid signal, any RAG
+evaluation harness (Milestone 2.5), and any prompt-registry integration (Milestone 2.4) must
+build on the contracts here rather than replacing them ad hoc.
