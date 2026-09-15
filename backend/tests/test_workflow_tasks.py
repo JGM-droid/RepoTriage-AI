@@ -1,0 +1,296 @@
+"""Durable workflow-run tests (Milestone 2.1): retry, timeout, and recovery.
+
+Exercises `process_workflow_run` directly (the function the Celery task
+wraps) so retry, timeout, and resumption semantics are tested without
+depending on real Celery timing or a live broker.
+"""
+
+import os
+from collections.abc import Iterator
+
+import pytest
+from celery.exceptions import SoftTimeLimitExceeded
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+import app.workflow.tasks as workflow_tasks
+from app.models.core import (
+    Analysis,
+    HumanDecision,
+    Issue,
+    Recommendation,
+    Repository,
+    StageAttempt,
+)
+from app.triage import rules as triage_rules
+from app.triage.service import status_history
+from app.workflow.tasks import process_workflow_run
+
+TRUNCATE_CORE_TABLES = (
+    "TRUNCATE audit_events, human_decisions, recommendations, "
+    "analyses, issues, repositories CASCADE"
+)
+
+
+@pytest.fixture()
+def database_session() -> Iterator[Session]:
+    database_url = os.getenv("DATABASE_URL")
+    if database_url is None:
+        pytest.skip("PostgreSQL is required for durable workflow tests.")
+
+    engine = create_engine(database_url, connect_args={"connect_timeout": 3})
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(TRUNCATE_CORE_TABLES))
+        with Session(engine) as session:
+            yield session
+    finally:
+        engine.dispose()
+
+
+def add_issue(
+    session: Session,
+    *,
+    title: str = "App crash on startup",
+    body: str = "Traceback attached below",
+    state: str = "open",
+) -> Issue:
+    repository = Repository(name="pallets/flask", source_url="https://github.com/pallets/flask")
+    session.add(repository)
+    session.flush()
+    issue = Issue(
+        repository_id=repository.id,
+        external_number=1,
+        title=title,
+        body=body,
+        state=state,
+        source_url="https://github.com/pallets/flask/issues/1",
+    )
+    session.add(issue)
+    session.commit()
+    return issue
+
+
+def start_analysis(session: Session, issue: Issue) -> Analysis:
+    analysis = Analysis(issue_id=issue.id, status="queued")
+    session.add(analysis)
+    session.commit()
+    session.refresh(analysis)
+    return analysis
+
+
+def test_process_workflow_run_completes_and_persists_stage_attempts_in_order(
+    database_session: Session,
+) -> None:
+    issue = add_issue(database_session)
+    analysis = start_analysis(database_session, issue)
+
+    result = process_workflow_run(database_session, analysis.id)
+
+    assert result.status == "completed"
+    attempts = (
+        database_session.query(StageAttempt)
+        .filter_by(analysis_id=analysis.id)
+        .order_by(StageAttempt.created_at, StageAttempt.id)
+        .all()
+    )
+    assert [attempt.stage for attempt in attempts] == list(workflow_tasks.STAGE_ORDER)
+    assert all(attempt.status == "succeeded" for attempt in attempts)
+    assert database_session.query(Recommendation).filter_by(analysis_id=analysis.id).count() == 1
+    assert database_session.query(HumanDecision).count() == 0
+
+
+def test_temporary_failure_retries_within_the_bound_and_recovers(
+    database_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue = add_issue(database_session)
+    analysis = start_analysis(database_session, issue)
+
+    call_count = {"value": 0}
+    original_classify = workflow_tasks.classify
+
+    def flaky_classify(issue_arg):
+        call_count["value"] += 1
+        if call_count["value"] == 1:
+            raise ValueError("transient failure")
+        return original_classify(issue_arg)
+
+    monkeypatch.setattr(workflow_tasks, "classify", flaky_classify)
+
+    with pytest.raises(workflow_tasks._RetryableWorkflowError):
+        process_workflow_run(database_session, analysis.id)
+
+    database_session.refresh(analysis)
+    assert analysis.status == "retrying"
+    assert analysis.attempt_count == 1
+
+    # Resume: a fresh call with the same analysis id retries and now succeeds.
+    result = process_workflow_run(database_session, analysis.id)
+
+    assert result.status == "completed"
+    assert database_session.query(Recommendation).filter_by(analysis_id=analysis.id).count() == 1
+
+
+def test_exhausted_retries_become_failed(
+    database_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue = add_issue(database_session)
+    analysis = start_analysis(database_session, issue)
+
+    def always_fail(*args, **kwargs):
+        raise ValueError("permanent failure")
+
+    monkeypatch.setattr(workflow_tasks, "classify", always_fail)
+
+    for _ in range(workflow_tasks.settings.triage_max_attempts - 1):
+        with pytest.raises(workflow_tasks._RetryableWorkflowError):
+            process_workflow_run(database_session, analysis.id)
+        database_session.refresh(analysis)
+        assert analysis.status == "retrying"
+
+    result = process_workflow_run(database_session, analysis.id)
+
+    assert result.status == "failed"
+    assert database_session.query(Recommendation).filter_by(analysis_id=analysis.id).count() == 0
+
+    history = status_history(database_session, issue.id, analysis.id)
+    assert history[-1][0] == "failed"
+
+
+def test_timeout_becomes_timed_out(
+    database_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue = add_issue(database_session)
+    analysis = start_analysis(database_session, issue)
+
+    def time_out(*args, **kwargs):
+        raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr(workflow_tasks, "classify", time_out)
+
+    result = process_workflow_run(database_session, analysis.id)
+
+    assert result.status == "timed_out"
+    attempts = database_session.query(StageAttempt).filter_by(analysis_id=analysis.id).all()
+    assert any(attempt.status == "timed_out" for attempt in attempts)
+
+
+def test_a_completed_run_is_never_re_executed(database_session: Session) -> None:
+    issue = add_issue(database_session)
+    analysis = start_analysis(database_session, issue)
+    process_workflow_run(database_session, analysis.id)
+
+    # Re-invoking (simulating a re-delivered/duplicate task) is a safe no-op.
+    result = process_workflow_run(database_session, analysis.id)
+
+    assert result.status == "completed"
+    assert database_session.query(Recommendation).filter_by(analysis_id=analysis.id).count() == 1
+
+
+def test_an_interrupted_run_resumes_without_duplicating_the_recommendation(
+    database_session: Session,
+) -> None:
+    issue = add_issue(database_session)
+    analysis = start_analysis(database_session, issue)
+
+    # Simulate a worker crash after the recommendation was written but before
+    # the analysis was marked completed.
+    analysis.status = "running"
+    database_session.commit()
+    database_session.add(Recommendation(analysis_id=analysis.id, status="proposed", content="{}"))
+    database_session.commit()
+
+    result = process_workflow_run(database_session, analysis.id)
+
+    assert result.status == "completed"
+    assert database_session.query(Recommendation).filter_by(analysis_id=analysis.id).count() == 1
+
+
+def test_a_crash_after_a_middle_stage_succeeds_resumes_without_rerunning_it(
+    database_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash after `assess` succeeds but before `propose` runs must resume
+    at `propose`, not re-execute `classify`/`retrieve_fixture_evidence`/
+    `assess` — proving persisted stage output, not just persisted status,
+    survives the interruption."""
+    issue = add_issue(database_session)
+    analysis = start_analysis(database_session, issue)
+
+    classification = triage_rules.classify(issue)
+    evidence = triage_rules.retrieve_fixture_evidence(issue, classification)
+    assessment = triage_rules.assess(issue, classification, evidence)
+
+    # Leave the database exactly as a real crash would: the three completed
+    # stages' StageAttempt rows (with output) are durably committed, the
+    # analysis is mid-attempt, and nothing later has run yet.
+    analysis.status = "running"
+    analysis.current_stage = "assess"
+    database_session.commit()
+    for stage, result in (
+        ("classify", classification),
+        ("retrieve_fixture_evidence", evidence),
+        ("assess", assessment),
+    ):
+        database_session.add(
+            StageAttempt(
+                analysis_id=analysis.id,
+                stage=stage,
+                attempt_number=1,
+                status="succeeded",
+                output=workflow_tasks._serialize_stage_output(stage, result),
+            )
+        )
+    database_session.commit()
+
+    def _must_not_run(*args, **kwargs):
+        raise AssertionError("a stage already succeeded in this attempt was re-executed")
+
+    monkeypatch.setattr(workflow_tasks, "classify", _must_not_run)
+    monkeypatch.setattr(workflow_tasks, "retrieve_fixture_evidence", _must_not_run)
+    monkeypatch.setattr(workflow_tasks, "assess", _must_not_run)
+
+    result = process_workflow_run(database_session, analysis.id)
+
+    # 3. execution resumes at the next incomplete stage.
+    assert result.status == "completed"
+    assert result.current_stage == "human_review"
+
+    # 1 & 2. earlier stages were not re-executed and no stage has more than
+    # one attempt row for this attempt number.
+    attempts = database_session.query(StageAttempt).filter_by(analysis_id=analysis.id).all()
+    stage_counts = {stage: 0 for stage in workflow_tasks.STAGE_ORDER}
+    for attempt in attempts:
+        stage_counts[attempt.stage] += 1
+    assert stage_counts == {stage: 1 for stage in workflow_tasks.STAGE_ORDER}
+    assert all(attempt.status == "succeeded" for attempt in attempts)
+
+    # 4. exactly one recommendation.
+    assert database_session.query(Recommendation).filter_by(analysis_id=analysis.id).count() == 1
+    # 5. no HumanDecision is ever created by the worker.
+    assert database_session.query(HumanDecision).count() == 0
+
+
+def test_database_rejects_a_second_stage_attempt_row_for_the_same_attempt(
+    database_session: Session,
+) -> None:
+    """The unique constraint on (analysis_id, stage, attempt_number) is a
+    hard invariant, not just an application-level convention."""
+    issue = add_issue(database_session)
+    analysis = start_analysis(database_session, issue)
+
+    database_session.add(
+        StageAttempt(
+            analysis_id=analysis.id, stage="classify", attempt_number=1, status="succeeded"
+        )
+    )
+    database_session.commit()
+
+    database_session.add(
+        StageAttempt(
+            analysis_id=analysis.id, stage="classify", attempt_number=1, status="succeeded"
+        )
+    )
+    with pytest.raises(IntegrityError):
+        database_session.commit()
+    database_session.rollback()

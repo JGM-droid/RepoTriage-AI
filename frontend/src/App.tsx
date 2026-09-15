@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ApiError, getHealth, getIssue, getIssues, getTriageResult, startTriage, submitTriageDecision } from "./api/client";
 import type {
@@ -11,6 +11,10 @@ import type {
 import { IssueTriage } from "./components/IssueTriage";
 import { ServiceStatus } from "./components/ServiceStatus";
 import "./styles.css";
+
+const POLL_INTERVAL_MS = 1000;
+const MAX_POLL_ATTEMPTS = 30;
+const TERMINAL_STATUSES = new Set(["completed", "failed", "timed_out"]);
 
 export default function App() {
   const [status, setStatus] = useState<ServiceStatusContract | null>(null);
@@ -25,10 +29,21 @@ export default function App() {
   const [detailError, setDetailError] = useState<"not-found" | "error" | null>(null);
   const [triageResult, setTriageResult] = useState<TriageResult | null>(null);
   const [triageHasRun, setTriageHasRun] = useState(false);
+  // True whenever the workflow itself is non-terminal on the backend, so
+  // "Run deterministic triage" must stay disabled — this stays true even
+  // after automatic polling pauses at the attempt cap; only a terminal
+  // result (or a hard error) clears it.
   const [triageRunning, setTriageRunning] = useState(false);
+  // True only when automatic polling stopped because it hit MAX_POLL_ATTEMPTS
+  // while the backend still reported a non-terminal status. It never starts
+  // another workflow; it only offers a manual, GET-only status refresh.
+  const [pollingPaused, setPollingPaused] = useState(false);
   const [triageError, setTriageError] = useState(false);
   const [decisionSubmitting, setDecisionSubmitting] = useState(false);
   const [decisionError, setDecisionError] = useState(false);
+  const pollIntervalRef = useRef<number | null>(null);
+  const pollIssueIdRef = useRef<string | null>(null);
+  const pollAttemptsRef = useRef(0);
 
   async function loadHealth() {
     setIsLoading(true);
@@ -62,12 +77,75 @@ export default function App() {
   }
 
   function resetTriageState() {
+    stopPolling();
     setTriageResult(null);
     setTriageHasRun(false);
     setTriageRunning(false);
+    setPollingPaused(false);
     setTriageError(false);
     setDecisionSubmitting(false);
     setDecisionError(false);
+  }
+
+  function stopPolling() {
+    pollIssueIdRef.current = null;
+    if (pollIntervalRef.current !== null) {
+      window.clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  }
+
+  async function pollTriageResult(issueId: string) {
+    if (pollIssueIdRef.current !== issueId) {
+      return;
+    }
+    pollAttemptsRef.current += 1;
+    try {
+      const result = await getTriageResult(issueId);
+      if (pollIssueIdRef.current !== issueId) {
+        return;
+      }
+      setTriageResult(result);
+      setTriageHasRun(true);
+      if (TERMINAL_STATUSES.has(result.status)) {
+        setTriageRunning(false);
+        setPollingPaused(false);
+        stopPolling();
+      } else if (pollAttemptsRef.current >= MAX_POLL_ATTEMPTS) {
+        // Stop automatic polling, but the workflow is still non-terminal on
+        // the backend: leave "Run deterministic triage" disabled and offer
+        // a manual, GET-only refresh instead of silently giving up.
+        setPollingPaused(true);
+        stopPolling();
+      }
+    } catch {
+      if (pollIssueIdRef.current !== issueId) {
+        return;
+      }
+      setTriageError(true);
+      setTriageRunning(false);
+      setPollingPaused(false);
+      stopPolling();
+    }
+  }
+
+  function startPolling(issueId: string) {
+    stopPolling();
+    setPollingPaused(false);
+    pollIssueIdRef.current = issueId;
+    pollAttemptsRef.current = 0;
+    void pollTriageResult(issueId);
+    pollIntervalRef.current = window.setInterval(() => void pollTriageResult(issueId), POLL_INTERVAL_MS);
+  }
+
+  function refreshTriageStatus() {
+    // Manual, GET-only resumption of polling after the attempt cap paused
+    // it. This must never start a new workflow — it only restarts the same
+    // read-only status loop that `startPolling` already performs.
+    if (!selectedIssueId) {
+      return;
+    }
+    startPolling(selectedIssueId);
   }
 
   async function openIssue(issueId: string) {
@@ -89,8 +167,13 @@ export default function App() {
     }
 
     try {
-      setTriageResult(await getTriageResult(issueId));
+      const existing = await getTriageResult(issueId);
+      setTriageResult(existing);
       setTriageHasRun(true);
+      if (!TERMINAL_STATUSES.has(existing.status)) {
+        setTriageRunning(true);
+        startPolling(issueId);
+      }
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
         setTriageHasRun(false);
@@ -107,11 +190,11 @@ export default function App() {
     setTriageRunning(true);
     setTriageError(false);
     try {
-      setTriageResult(await startTriage(selectedIssueId));
+      await startTriage(selectedIssueId);
       setTriageHasRun(true);
+      startPolling(selectedIssueId);
     } catch {
       setTriageError(true);
-    } finally {
       setTriageRunning(false);
     }
   }
@@ -134,6 +217,7 @@ export default function App() {
   useEffect(() => {
     void loadHealth();
     void loadIssues();
+    return () => stopPolling();
   }, []);
 
   return (
@@ -228,9 +312,11 @@ export default function App() {
         <IssueTriage
           result={triageResult}
           isRunning={triageRunning}
+          pollingPaused={pollingPaused}
           error={triageError}
           hasRun={triageHasRun}
           onRunTriage={() => void runTriage()}
+          onRefreshStatus={refreshTriageStatus}
           onDecide={(decision) => void decideTriage(decision)}
           decisionSubmitting={decisionSubmitting}
           decisionError={decisionError}

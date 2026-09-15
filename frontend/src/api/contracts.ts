@@ -66,18 +66,42 @@ export type TriageStatusEvent = {
   created_at: string;
 };
 
-export type TriageStatus = "queued" | "running" | "completed" | "failed";
+export type TriageStatus =
+  | "queued"
+  | "running"
+  | "retrying"
+  | "completed"
+  | "failed"
+  | "timed_out";
+
+export type TriageStageAttempt = {
+  stage: string;
+  attempt_number: number;
+  status: string;
+  error: string | null;
+  created_at: string;
+};
 
 export type TriageResult = {
   analysis_id: string;
   issue_id: string;
   status: TriageStatus;
+  current_stage: string | null;
+  attempt_count: number;
   classification: TriageClassification | null;
   evidence: TriageEvidenceItem[];
   assessment: TriageAssessment | null;
   proposed_action: TriageProposedAction | null;
   human_review: TriageHumanReview | null;
   status_history: TriageStatusEvent[];
+  stage_attempts: TriageStageAttempt[];
   created_at: string;
   updated_at: string;
+};
+
+export type TriageStartedResponse = {
+  analysis_id: string;
+  issue_id: string;
+  status: TriageStatus;
+  poll_url: string;
 };

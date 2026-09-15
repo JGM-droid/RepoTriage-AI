@@ -3,10 +3,10 @@ from collections.abc import Iterator
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Header, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
@@ -15,17 +15,20 @@ from app.decisions.service import (
     latest_decision_for_recommendation,
     record_decision,
 )
-from app.models.core import Analysis, Issue, Recommendation
+from app.models.core import Analysis, Issue, Recommendation, StageAttempt
 from app.schemas.core import (
     ErrorResponse,
     TriageDecisionRequest,
     TriageHumanReview,
     TriageRequest,
     TriageResult,
+    TriageStageAttempt,
+    TriageStartedResponse,
     TriageStatusEvent,
 )
 from app.triage.rules import TRIAGE_RULESET_VERSION
-from app.triage.service import TriageStageError, run_triage, status_history
+from app.triage.service import status_history
+from app.workflow.tasks import execute_triage_workflow, record_transition
 
 router = APIRouter(prefix="/issues", tags=["triage"])
 
@@ -63,11 +66,19 @@ def _triage_result_from_analysis(session: Session, analysis: Analysis) -> Triage
     recommendation = analysis.recommendations[0] if analysis.recommendations else None
     content = json.loads(recommendation.content) if recommendation else None
     history = status_history(session, analysis.issue_id, analysis.id)
+    attempts = (
+        session.query(StageAttempt)
+        .filter(StageAttempt.analysis_id == analysis.id)
+        .order_by(StageAttempt.created_at, StageAttempt.id)
+        .all()
+    )
 
     return TriageResult(
         analysis_id=analysis.id,
         issue_id=analysis.issue_id,
         status=analysis.status,
+        current_stage=analysis.current_stage,
+        attempt_count=analysis.attempt_count,
         classification=content["classification"] if content else None,
         evidence=content["evidence"] if content else [],
         assessment=content["assessment"] if content else None,
@@ -79,6 +90,16 @@ def _triage_result_from_analysis(session: Session, analysis: Analysis) -> Triage
             TriageStatusEvent(status=transition_status, created_at=created_at)
             for transition_status, created_at in history
         ],
+        stage_attempts=[
+            TriageStageAttempt(
+                stage=attempt.stage,
+                attempt_number=attempt.attempt_number,
+                status=attempt.status,
+                error=attempt.error,
+                created_at=attempt.created_at,
+            )
+            for attempt in attempts
+        ],
         created_at=analysis.created_at,
         updated_at=analysis.updated_at,
     )
@@ -86,10 +107,12 @@ def _triage_result_from_analysis(session: Session, analysis: Analysis) -> Triage
 
 @router.post(
     "/{issue_id}/triage",
-    response_model=TriageResult,
+    response_model=TriageStartedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
     responses={
         status.HTTP_400_BAD_REQUEST: {"model": ErrorResponse},
         status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
+        status.HTTP_409_CONFLICT: {"model": ErrorResponse},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse},
     },
 )
@@ -97,7 +120,8 @@ def start_issue_triage(
     issue_id: UUID,
     session: TriageSession,
     request: TriageRequest = TriageRequest(),
-) -> TriageResult | JSONResponse:
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> TriageStartedResponse | JSONResponse:
     if request.ruleset_version != TRIAGE_RULESET_VERSION:
         return _error_response(
             status.HTTP_400_BAD_REQUEST,
@@ -121,29 +145,69 @@ def start_issue_triage(
             "Issue not found.",
         )
 
+    if idempotency_key:
+        try:
+            existing = session.scalar(
+                select(Analysis).where(Analysis.idempotency_key == idempotency_key)
+            )
+        except SQLAlchemyError:
+            return _error_response(
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                "triage_unavailable",
+                "Deterministic triage is unavailable.",
+            )
+        if existing is not None:
+            if existing.issue_id != issue_id:
+                return _error_response(
+                    status.HTTP_409_CONFLICT,
+                    "idempotency_key_conflict",
+                    "This idempotency key is already associated with a different issue.",
+                )
+            return _workflow_started_response(existing)
+
+    analysis = Analysis(issue_id=issue_id, status="queued", idempotency_key=idempotency_key)
+    session.add(analysis)
     try:
-        analysis = run_triage(session, issue)
-    except TriageStageError:
-        return _error_response(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "triage_failed",
-            "Deterministic triage failed to complete.",
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        existing = session.scalar(
+            select(Analysis).where(Analysis.idempotency_key == idempotency_key)
         )
-    except SQLAlchemyError:
+        if existing is not None and existing.issue_id == issue_id:
+            return _workflow_started_response(existing)
         return _error_response(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "triage_unavailable",
-            "Deterministic triage is unavailable.",
+            status.HTTP_409_CONFLICT,
+            "idempotency_key_conflict",
+            "This idempotency key is already associated with a different issue.",
         )
 
-    return _triage_result_from_analysis(session, analysis)
+    session.refresh(analysis)
+    record_transition(session, issue, analysis, "queued")
+    execute_triage_workflow.delay(str(analysis.id))
+
+    return _workflow_started_response(analysis)
+
+
+def _workflow_started_response(analysis: Analysis) -> TriageStartedResponse:
+    return TriageStartedResponse(
+        analysis_id=analysis.id,
+        issue_id=analysis.issue_id,
+        status=analysis.status,
+        poll_url=f"/api/v1/issues/{analysis.issue_id}/triage",
+    )
 
 
 def _latest_analysis_for_issue(session: Session, issue_id: UUID) -> Analysis | None:
+    # populate_existing: this analysis is written by a background worker on a
+    # separate session, so a row already cached in this session's identity
+    # map (from an earlier read in the same session) must be overwritten with
+    # its current durable state rather than silently reused stale.
     return session.scalar(
         select(Analysis)
         .where(Analysis.issue_id == issue_id)
         .order_by(Analysis.created_at.desc(), Analysis.id.desc())
+        .execution_options(populate_existing=True)
     )
 
 

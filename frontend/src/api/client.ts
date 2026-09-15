@@ -4,6 +4,7 @@ import type {
   ServiceStatus,
   TriageDecision,
   TriageResult,
+  TriageStartedResponse,
 } from "./contracts";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
@@ -48,8 +49,8 @@ export async function getTriageResult(issueId: string): Promise<TriageResult> {
   );
 }
 
-export async function startTriage(issueId: string): Promise<TriageResult> {
-  return fetchJson<TriageResult>(
+export async function startTriage(issueId: string): Promise<TriageStartedResponse> {
+  return fetchJson<TriageStartedResponse>(
     `/api/v1/issues/${issueId}/triage`,
     "Deterministic triage could not be started.",
     {

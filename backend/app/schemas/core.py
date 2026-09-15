@@ -150,15 +150,33 @@ class TriageStatusEvent(BaseModel):
     created_at: datetime
 
 
+class TriageStageAttempt(BaseModel):
+    stage: str
+    attempt_number: int
+    status: str
+    error: str | None
+    created_at: datetime
+
+
 class TriageResult(BaseModel):
     analysis_id: UUID
     issue_id: UUID
     status: str
+    current_stage: str | None
+    attempt_count: int
     classification: TriageClassification | None
     evidence: list[TriageEvidenceItem]
     assessment: TriageAssessment | None
     proposed_action: TriageProposedAction | None
     human_review: TriageHumanReview | None
     status_history: list[TriageStatusEvent]
+    stage_attempts: list[TriageStageAttempt]
     created_at: datetime
     updated_at: datetime
+
+
+class TriageStartedResponse(BaseModel):
+    analysis_id: UUID
+    issue_id: UUID
+    status: str
+    poll_url: str

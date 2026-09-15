@@ -30,10 +30,42 @@ const noTriageYetResponse = {
   error: "triage_not_found",
   message: "No deterministic triage has been run for this issue yet.",
 };
+const startedTriageResponse = {
+  analysis_id: "analysis-1",
+  issue_id: "issue-1",
+  status: "queued",
+  poll_url: "/api/v1/issues/issue-1/triage",
+};
+const runningTriageResponse = {
+  analysis_id: "analysis-1",
+  issue_id: "issue-1",
+  status: "running",
+  current_stage: "classify",
+  attempt_count: 1,
+  classification: null,
+  evidence: [],
+  assessment: null,
+  proposed_action: null,
+  human_review: null,
+  status_history: [
+    { status: "queued", created_at: "2026-09-14T12:00:00Z" },
+    { status: "running", created_at: "2026-09-14T12:00:01Z" },
+  ],
+  stage_attempts: [],
+  created_at: "2026-09-14T12:00:00Z",
+  updated_at: "2026-09-14T12:00:00Z",
+};
+const retryingTriageResponse = {
+  ...runningTriageResponse,
+  status: "retrying",
+  attempt_count: 1,
+};
 const completedTriageResponse = {
   analysis_id: "analysis-1",
   issue_id: "issue-1",
   status: "completed",
+  current_stage: "human_review",
+  attempt_count: 1,
   classification: { label: "bug-crash", matched_rule: "crash-keyword", matched_keywords: ["crash"] },
   evidence: [{ field: "title", excerpt: "CLI crashes on Windows", source_url: "https://github.com/pallets/flask/issues/101" }],
   assessment: { severity: "high", rationale: "Matched rule 'crash-keyword'." },
@@ -50,6 +82,9 @@ const completedTriageResponse = {
     { status: "queued", created_at: "2026-09-14T12:00:00Z" },
     { status: "running", created_at: "2026-09-14T12:00:01Z" },
     { status: "completed", created_at: "2026-09-14T12:00:02Z" },
+  ],
+  stage_attempts: [
+    { stage: "classify", attempt_number: 1, status: "succeeded", error: null, created_at: "2026-09-14T12:00:01Z" },
   ],
   created_at: "2026-09-14T12:00:00Z",
   updated_at: "2026-09-14T12:00:00Z",
@@ -69,6 +104,8 @@ const failedTriageResponse = {
   analysis_id: "analysis-2",
   issue_id: "issue-1",
   status: "failed",
+  current_stage: "classify",
+  attempt_count: 3,
   classification: null,
   evidence: [],
   assessment: null,
@@ -79,8 +116,13 @@ const failedTriageResponse = {
     { status: "running", created_at: "2026-09-14T12:00:01Z" },
     { status: "failed", created_at: "2026-09-14T12:00:02Z" },
   ],
+  stage_attempts: [],
   created_at: "2026-09-14T12:00:00Z",
   updated_at: "2026-09-14T12:00:00Z",
+};
+const timedOutTriageResponse = {
+  ...failedTriageResponse,
+  status: "timed_out",
 };
 
 function jsonResponse(body: object, status = 200) {
@@ -189,12 +231,13 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows a running state while deterministic triage executes", async () => {
+  it("shows a queued/running state while deterministic triage executes", async () => {
     vi.mocked(fetch)
       .mockReturnValueOnce(jsonResponse(healthResponse))
       .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
+      .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
       .mockReturnValueOnce(new Promise(() => {}));
 
     render(<App />);
@@ -202,7 +245,104 @@ describe("App", () => {
     await screen.findByText("No deterministic triage has been run for this issue yet.");
     fireEvent.click(screen.getByRole("button", { name: "Run deterministic triage" }));
 
-    expect(await screen.findByText("Running deterministic triage...")).toBeInTheDocument();
+    expect(await screen.findByText("Starting deterministic triage...")).toBeInTheDocument();
+  });
+
+  it("shows a retrying state after a transient failure, then polls to completion", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(fetch)
+      .mockReturnValueOnce(jsonResponse(healthResponse))
+      .mockReturnValueOnce(jsonResponse(issueListResponse))
+      .mockReturnValueOnce(jsonResponse(issueDetailResponse))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
+      .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
+      .mockReturnValueOnce(jsonResponse(retryingTriageResponse))
+      .mockReturnValueOnce(jsonResponse(completedTriageResponse));
+
+    render(<App />);
+    fireEvent.click(await findIssueButton("CLI crashes on Windows"));
+    await screen.findByText("No deterministic triage has been run for this issue yet.");
+    fireEvent.click(screen.getByRole("button", { name: "Run deterministic triage" }));
+
+    expect(
+      await screen.findByText("Retrying deterministic triage after a transient failure..."),
+    ).toBeInTheDocument();
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(
+      await screen.findByText("This result is rule-based and has not been approved by a human."),
+    ).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it("stops polling once a terminal state is reached", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(fetch)
+      .mockReturnValueOnce(jsonResponse(healthResponse))
+      .mockReturnValueOnce(jsonResponse(issueListResponse))
+      .mockReturnValueOnce(jsonResponse(issueDetailResponse))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
+      .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
+      .mockReturnValueOnce(jsonResponse(completedTriageResponse));
+
+    render(<App />);
+    fireEvent.click(await findIssueButton("CLI crashes on Windows"));
+    await screen.findByText("No deterministic triage has been run for this issue yet.");
+    fireEvent.click(screen.getByRole("button", { name: "Run deterministic triage" }));
+    await screen.findByText("This result is rule-based and has not been approved by a human.");
+
+    const callCountAfterCompletion = vi.mocked(fetch).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(vi.mocked(fetch).mock.calls.length).toBe(callCountAfterCompletion);
+    vi.useRealTimers();
+  });
+
+  it("pauses automatic polling at the attempt cap without re-enabling Run, and Refresh status resumes polling without starting a new workflow", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockReturnValueOnce(jsonResponse(healthResponse))
+      .mockReturnValueOnce(jsonResponse(issueListResponse))
+      .mockReturnValueOnce(jsonResponse(issueDetailResponse))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
+      .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
+      .mockImplementation(() => jsonResponse(runningTriageResponse));
+
+    render(<App />);
+    fireEvent.click(await findIssueButton("CLI crashes on Windows"));
+    await screen.findByText("No deterministic triage has been run for this issue yet.");
+    fireEvent.click(screen.getByRole("button", { name: "Run deterministic triage" }));
+    await screen.findByText("Running deterministic triage...");
+
+    // 1 immediate poll + 29 more interval ticks (1s apart) reaches the
+    // 30-attempt cap while the backend still reports "running".
+    await vi.advanceTimersByTimeAsync(29_000);
+
+    expect(await screen.findByText(/Automatic status updates paused/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Running..." })).toBeDisabled();
+
+    const callsAtPause = fetchMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(fetchMock.mock.calls.length).toBe(callsAtPause); // polling really stopped
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh status" }));
+
+    await screen.findByText("Running deterministic triage...");
+    expect(screen.queryByText(/Automatic status updates paused/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Running..." })).toBeDisabled();
+    expect(fetchMock.mock.calls.length).toBe(callsAtPause + 1); // exactly one GET, no new workflow
+
+    fetchMock.mockReturnValueOnce(jsonResponse(completedTriageResponse));
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(
+      await screen.findByText("This result is rule-based and has not been approved by a human."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run deterministic triage" })).not.toBeDisabled();
+
+    vi.useRealTimers();
   });
 
   it("shows the separated triage result after a completed run", async () => {
@@ -211,6 +351,7 @@ describe("App", () => {
       .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
+      .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
       .mockReturnValueOnce(jsonResponse(completedTriageResponse));
 
     render(<App />);
@@ -235,6 +376,7 @@ describe("App", () => {
       .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
+      .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
       .mockReturnValueOnce(jsonResponse(completedTriageResponse))
       .mockReturnValueOnce(jsonResponse(approvedTriageResponse));
 
@@ -256,6 +398,7 @@ describe("App", () => {
       .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
+      .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
       .mockReturnValueOnce(jsonResponse(completedTriageResponse))
       .mockRejectedValueOnce(new Error("network error"));
 
@@ -275,6 +418,7 @@ describe("App", () => {
       .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
+      .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
       .mockReturnValueOnce(jsonResponse(failedTriageResponse));
 
     render(<App />);
@@ -283,6 +427,25 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run deterministic triage" }));
 
     expect(await screen.findByText("Deterministic triage failed to complete.")).toBeInTheDocument();
+  });
+
+  it("shows a timed-out triage state", async () => {
+    vi.mocked(fetch)
+      .mockReturnValueOnce(jsonResponse(healthResponse))
+      .mockReturnValueOnce(jsonResponse(issueListResponse))
+      .mockReturnValueOnce(jsonResponse(issueDetailResponse))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
+      .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
+      .mockReturnValueOnce(jsonResponse(timedOutTriageResponse));
+
+    render(<App />);
+    fireEvent.click(await findIssueButton("CLI crashes on Windows"));
+    await screen.findByText("No deterministic triage has been run for this issue yet.");
+    fireEvent.click(screen.getByRole("button", { name: "Run deterministic triage" }));
+
+    expect(
+      await screen.findByText("Deterministic triage timed out before completing."),
+    ).toBeInTheDocument();
   });
 
   it("shows issue not found when detail returns 404", async () => {

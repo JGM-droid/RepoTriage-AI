@@ -7,6 +7,11 @@ class Settings(BaseSettings):
     service_name: str = "repotriage-api"
     database_url: str = "postgresql+psycopg://localhost:5432/repotriage"
     cors_origin: str = "http://localhost:5173"
+    redis_url: str = "redis://localhost:6379/0"
+    triage_max_attempts: int = 3
+    triage_retry_countdown_seconds: int = 1
+    triage_stage_timeout_seconds: int = 30
+    celery_task_always_eager: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

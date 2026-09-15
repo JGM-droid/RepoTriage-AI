@@ -3,9 +3,11 @@ import type { TriageDecision, TriageResult } from "../api/contracts";
 type IssueTriageProps = {
   result: TriageResult | null;
   isRunning: boolean;
+  pollingPaused: boolean;
   error: boolean;
   hasRun: boolean;
   onRunTriage: () => void;
+  onRefreshStatus: () => void;
   onDecide: (decision: TriageDecision) => void;
   decisionSubmitting: boolean;
   decisionError: boolean;
@@ -17,12 +19,20 @@ const DECISION_LABELS: Record<TriageDecision, string> = {
   request_revision: "Request revision",
 };
 
+const RUNNING_STATUS_LABELS: Record<string, string> = {
+  queued: "Deterministic triage is queued...",
+  running: "Running deterministic triage...",
+  retrying: "Retrying deterministic triage after a transient failure...",
+};
+
 export function IssueTriage({
   result,
   isRunning,
+  pollingPaused,
   error,
   hasRun,
   onRunTriage,
+  onRefreshStatus,
   onDecide,
   decisionSubmitting,
   decisionError,
@@ -43,9 +53,34 @@ export function IssueTriage({
         <p>No deterministic triage has been run for this issue yet.</p>
       ) : null}
 
-      {isRunning ? <p role="status">Running deterministic triage...</p> : null}
+      {isRunning && !pollingPaused ? (
+        <p role="status">
+          {(result && RUNNING_STATUS_LABELS[result.status]) ?? "Starting deterministic triage..."}
+        </p>
+      ) : null}
+
+      {isRunning && pollingPaused ? (
+        <div className="polling-paused" role="status">
+          <p>
+            {(result && RUNNING_STATUS_LABELS[result.status]) ?? "Deterministic triage is still in progress."}
+            {" "}Automatic status updates paused after 30 seconds; the workflow is still running in the
+            background.
+          </p>
+          <button type="button" onClick={onRefreshStatus}>
+            Refresh status
+          </button>
+        </div>
+      ) : null}
 
       {error ? <p role="alert">Deterministic triage is unavailable.</p> : null}
+
+      {result && result.status === "failed" ? (
+        <p role="alert">Deterministic triage failed to complete.</p>
+      ) : null}
+
+      {result && result.status === "timed_out" ? (
+        <p role="alert">Deterministic triage timed out before completing.</p>
+      ) : null}
 
       {result && result.status === "completed" ? (
         <div className="triage-result">
@@ -127,10 +162,6 @@ export function IssueTriage({
             ) : null}
           </div>
         </div>
-      ) : null}
-
-      {result && result.status === "failed" ? (
-        <p role="alert">Deterministic triage failed to complete.</p>
       ) : null}
     </section>
   );

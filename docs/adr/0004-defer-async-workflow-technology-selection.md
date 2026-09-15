@@ -1,6 +1,6 @@
 # ADR 0004: Defer Async Workflow Technology Selection
 
-**Status:** Deferred
+**Status:** Superseded by [ADR 0007](0007-durable-async-workflow-technology.md)
 **Date:** 2026-08-31
 
 ## Context

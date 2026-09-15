@@ -77,10 +77,16 @@ def test_release_1_workflow_completes_end_to_end_without_a_paid_provider(
     assert detail_response.json()["id"] == issue_id
 
     # Analyze: deterministic classify -> retrieve_fixture_evidence -> assess
-    # -> propose -> human_review, executed synchronously with no AI/LLM call.
-    triage_response = client.post(f"/api/v1/issues/{issue_id}/triage", json={})
-    assert triage_response.status_code == 200
-    triage_payload = triage_response.json()
+    # -> propose -> human_review, executed durably in a background worker
+    # (Celery runs in eager/synchronous test mode; see conftest.py) with no
+    # AI/LLM call. The start endpoint returns 202 immediately.
+    start_response = client.post(f"/api/v1/issues/{issue_id}/triage", json={})
+    assert start_response.status_code == 202
+
+    # Review: poll the status endpoint for the completed, separated result.
+    review_response = client.get(f"/api/v1/issues/{issue_id}/triage")
+    assert review_response.status_code == 200
+    triage_payload = review_response.json()
     assert triage_payload["status"] == "completed"
     assert triage_payload["classification"] is not None
     assert triage_payload["evidence"]
@@ -88,11 +94,6 @@ def test_release_1_workflow_completes_end_to_end_without_a_paid_provider(
     assert triage_payload["proposed_action"] is not None
     assert triage_payload["human_review"]["recommendation_status"] == "proposed"
     assert triage_payload["human_review"]["decision"] is None
-
-    # Review: retrieve the proposed recommendation before any decision.
-    review_response = client.get(f"/api/v1/issues/{issue_id}/triage")
-    assert review_response.status_code == 200
-    assert review_response.json()["human_review"]["recommendation_status"] == "proposed"
 
     # Decision: an explicit human decision, never inferred from model output.
     decision_response = client.post(
