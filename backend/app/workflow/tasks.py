@@ -246,6 +246,11 @@ def _record_ai_routing_event(
                 "model": ai_response.model,
                 "status": ai_response.status,
                 "fallback_reason": ai_response.fallback_reason,
+                "prompt_id": ai_response.prompt_id,
+                "prompt_version": ai_response.prompt_version,
+                "prompt_status": ai_response.prompt_status,
+                "prompt_template_hash": ai_response.prompt_template_hash,
+                "rendered_prompt_hash": ai_response.rendered_prompt_hash,
             },
         )
     )

@@ -93,7 +93,11 @@ const completedTriageResponse = {
     status: "succeeded",
     provider: "mock",
     model: "deterministic-v1",
-    prompt_name: "triage_narrative_v1",
+    prompt_id: "triage_narrative",
+    prompt_version: "1.0.0",
+    prompt_status: "released",
+    prompt_template_hash: "06e394552019bf7b8c8e437c0647d64d21ec1a5ecf81dd28c68ff9cbcee1857c",
+    rendered_prompt_hash: "0".repeat(64),
     input_tokens: 0,
     output_tokens: 0,
     estimated_cost_usd: 0,
@@ -415,6 +419,7 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Cites: issue:5756")).toBeInTheDocument();
     expect(screen.getByText("Provider: mock (deterministic-v1)", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("Prompt: triage_narrative@1.0.0", { exact: false })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Request revision" })).toBeInTheDocument();

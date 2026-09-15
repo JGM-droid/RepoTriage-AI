@@ -145,6 +145,15 @@ def test_polling_after_start_returns_the_completed_result_with_separated_section
     assert payload["ai_inference"]["narrative"]
     assert payload["ai_inference"]["citations"] == []
 
+    # Prompt-registry provenance (Milestone 2.4) is exposed through the API
+    # for technical inspection, even though the frontend's normal UI only
+    # surfaces prompt_id/prompt_version, not the hashes.
+    assert payload["ai_inference"]["prompt_id"] == "triage_narrative"
+    assert payload["ai_inference"]["prompt_version"] == "1.0.0"
+    assert payload["ai_inference"]["prompt_status"] == "released"
+    assert len(payload["ai_inference"]["prompt_template_hash"]) == 64  # sha256 hex digest
+    assert len(payload["ai_inference"]["rendered_prompt_hash"]) == 64
+
 
 def test_get_triage_is_backward_compatible_with_pre_2_3_recommendations(
     client: TestClient, database_session: Session

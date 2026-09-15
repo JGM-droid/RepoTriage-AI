@@ -165,6 +165,9 @@ export function IssueTriage({
                     }`
                   : null}
               </p>
+              <p className="ai-inference-prompt-provenance">
+                Prompt: {result.ai_inference.prompt_id}@{result.ai_inference.prompt_version}
+              </p>
             </div>
           ) : null}
 

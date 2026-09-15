@@ -55,7 +55,14 @@ export type TriageAIInference = {
   status: "succeeded" | "fallback";
   provider: string;
   model: string;
-  prompt_name: string;
+  // Prompt-registry provenance (ADR 0010). The UI shows only
+  // `prompt_id`/`prompt_version`; the hashes are kept in the contract for
+  // technical inspection, not rendered in the normal UI.
+  prompt_id: string;
+  prompt_version: string;
+  prompt_status: "draft" | "released" | "retired";
+  prompt_template_hash: string;
+  rendered_prompt_hash: string;
   input_tokens: number;
   output_tokens: number;
   estimated_cost_usd: number;

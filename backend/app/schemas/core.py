@@ -137,13 +137,23 @@ class TriageAIInference(BaseModel):
     Never a substitute for `classification`/`assessment`/`proposed_action`
     (all deterministic) or `human_review` (an explicit human decision).
     Extra stored fields such as latency are intentionally not exposed here.
+
+    `prompt_id`/`prompt_version`/`prompt_status`/`prompt_template_hash`/
+    `rendered_prompt_hash` are prompt-registry provenance (ADR 0010) —
+    included for technical/audit inspection via the API; the frontend's
+    normal UI surfaces only `prompt_id`/`prompt_version`, not the hashes
+    or the rendered prompt text itself (never returned by this API).
     """
 
     narrative: str
     status: str
     provider: str
     model: str
-    prompt_name: str
+    prompt_id: str
+    prompt_version: str
+    prompt_status: str
+    prompt_template_hash: str
+    rendered_prompt_hash: str
     input_tokens: int
     output_tokens: int
     estimated_cost_usd: float

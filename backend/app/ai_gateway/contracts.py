@@ -13,8 +13,6 @@ from dataclasses import dataclass, field
 from app.retrieval.contracts import RetrievedRecord
 from app.triage.rules import Assessment, Classification, EvidenceItem, ProposedAction
 
-PROMPT_NAME = "triage_narrative_v1"
-
 STATUS_SUCCEEDED = "succeeded"
 STATUS_FALLBACK = "fallback"
 _VALID_STATUSES = (STATUS_SUCCEEDED, STATUS_FALLBACK)
@@ -55,13 +53,23 @@ class AIResponse:
     `citations` may only reference identifiers that were actually present
     in the request's `retrieved_context` — validated by
     `validate_citations` before an `AIResponse` referencing them is ever
-    constructed from adapter output."""
+    constructed from adapter output.
+
+    `prompt_id`/`prompt_version`/`prompt_status`/`prompt_template_hash`/
+    `rendered_prompt_hash` are the prompt-registry provenance for this
+    result (see `app.ai_gateway.prompts`, ADR 0010) — set from the single
+    `RenderedPrompt` both adapters render through, never constructed
+    independently by either adapter."""
 
     narrative: str
     status: str
     provider: str
     model: str
-    prompt_name: str
+    prompt_id: str
+    prompt_version: str
+    prompt_status: str
+    prompt_template_hash: str
+    rendered_prompt_hash: str
     input_tokens: int
     output_tokens: int
     estimated_cost_usd: float
@@ -74,6 +82,14 @@ class AIResponse:
             raise ValueError("AIResponse.narrative must not be empty.")
         if self.status not in _VALID_STATUSES:
             raise ValueError(f"Unknown AIResponse status: {self.status!r}")
+        if not self.prompt_id:
+            raise ValueError("AIResponse.prompt_id must not be empty.")
+        if not self.prompt_version:
+            raise ValueError("AIResponse.prompt_version must not be empty.")
+        if not self.prompt_template_hash:
+            raise ValueError("AIResponse.prompt_template_hash must not be empty.")
+        if not self.rendered_prompt_hash:
+            raise ValueError("AIResponse.rendered_prompt_hash must not be empty.")
         if self.input_tokens < 0 or self.output_tokens < 0:
             raise ValueError("AIResponse token counts must not be negative.")
         if self.estimated_cost_usd < 0:

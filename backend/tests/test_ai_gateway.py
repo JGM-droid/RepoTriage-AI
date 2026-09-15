@@ -20,6 +20,7 @@ from app.ai_gateway.contracts import (
     ProviderCallFailed,
     validate_citations,
 )
+from app.ai_gateway.prompts import RenderedPrompt, render_active_prompt
 from app.config import Settings
 from app.retrieval.contracts import RetrievedRecord
 from app.triage.rules import Assessment, Classification, EvidenceItem, ProposedAction
@@ -59,6 +60,10 @@ def make_request(task: str = "triage_narrative", retrieved_context: tuple = ()) 
         proposed_action=PROPOSED_ACTION,
         retrieved_context=retrieved_context,
     )
+
+
+def make_rendered(request: AIRequest | None = None) -> RenderedPrompt:
+    return render_active_prompt("triage_narrative", request or make_request())
 
 
 def make_settings(**overrides: object) -> Settings:
@@ -116,7 +121,11 @@ def test_ai_response_rejects_invalid_fields(overrides: dict[str, object]) -> Non
         "status": STATUS_SUCCEEDED,
         "provider": "mock",
         "model": "deterministic-v1",
-        "prompt_name": "triage_narrative_v1",
+        "prompt_id": "triage_narrative",
+        "prompt_version": "1.0.0",
+        "prompt_status": "released",
+        "prompt_template_hash": "a" * 64,
+        "rendered_prompt_hash": "b" * 64,
         "input_tokens": 0,
         "output_tokens": 0,
         "estimated_cost_usd": 0.0,
@@ -127,12 +136,37 @@ def test_ai_response_rejects_invalid_fields(overrides: dict[str, object]) -> Non
         AIResponse(**fields)
 
 
+@pytest.mark.parametrize(
+    "missing_field",
+    ["prompt_id", "prompt_version", "prompt_template_hash", "rendered_prompt_hash"],
+)
+def test_ai_response_rejects_empty_prompt_provenance_fields(missing_field: str) -> None:
+    fields = {
+        "narrative": "A narrative.",
+        "status": STATUS_SUCCEEDED,
+        "provider": "mock",
+        "model": "deterministic-v1",
+        "prompt_id": "triage_narrative",
+        "prompt_version": "1.0.0",
+        "prompt_status": "released",
+        "prompt_template_hash": "a" * 64,
+        "rendered_prompt_hash": "b" * 64,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "estimated_cost_usd": 0.0,
+        "latency_ms": 0.0,
+    }
+    fields[missing_field] = ""
+    with pytest.raises(ValueError):
+        AIResponse(**fields)
+
+
 # --- mock adapter ----------------------------------------------------------
 
 
 def test_mock_adapter_is_deterministic_with_zero_usage_and_cost() -> None:
-    first = mock_adapter.call(make_request())
-    second = mock_adapter.call(make_request())
+    first = mock_adapter.call(make_request(), make_rendered())
+    second = mock_adapter.call(make_request(), make_rendered())
 
     assert first == second
     assert first.status == STATUS_SUCCEEDED
@@ -142,6 +176,22 @@ def test_mock_adapter_is_deterministic_with_zero_usage_and_cost() -> None:
     assert first.estimated_cost_usd == 0.0
     assert "bug-crash" in first.narrative
     assert "Prioritize for immediate triage." in first.narrative
+
+
+def test_mock_adapter_records_the_rendered_prompt_provenance_without_sending_it() -> None:
+    request = make_request()
+    rendered = make_rendered(request)
+
+    result = mock_adapter.call(request, rendered)
+
+    assert result.prompt_id == rendered.prompt_id == "triage_narrative"
+    assert result.prompt_version == rendered.prompt_version == "1.0.0"
+    assert result.prompt_status == rendered.prompt_status == "released"
+    assert result.prompt_template_hash == rendered.prompt_template_hash
+    assert result.rendered_prompt_hash == rendered.rendered_prompt_hash
+    # The mock narrative is its own deterministic summary, not the rendered
+    # prompt text itself.
+    assert result.narrative != rendered.text
 
 
 # --- OpenAI adapter (mocked HTTP only) -------------------------------------
@@ -175,7 +225,9 @@ def test_openai_adapter_success_records_usage_and_computes_cost(
         openai_output_price_per_million_usd=2.0,
     )
 
-    result = openai_adapter.call(make_request(), settings)
+    request = make_request()
+    rendered = make_rendered(request)
+    result = openai_adapter.call(request, rendered, settings)
 
     assert result.status == STATUS_SUCCEEDED
     assert result.provider == "openai"
@@ -184,6 +236,33 @@ def test_openai_adapter_success_records_usage_and_computes_cost(
     assert result.output_tokens == 500_000
     assert result.estimated_cost_usd == pytest.approx(1.0 + 1.0)
     assert result.narrative == "A grounded narrative."
+    assert result.prompt_id == rendered.prompt_id
+    assert result.prompt_version == rendered.prompt_version
+    assert result.prompt_status == rendered.prompt_status
+    assert result.prompt_template_hash == rendered.prompt_template_hash
+    assert result.rendered_prompt_hash == rendered.rendered_prompt_hash
+
+
+def test_openai_adapter_sends_exactly_the_shared_rendered_prompt_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The registry, not the adapter, owns prompt construction — the
+    adapter must send `rendered.text` byte-for-byte, never a second,
+    independently built prompt string."""
+    captured: dict[str, object] = {}
+
+    def fake_post(url, *, json, headers, timeout):
+        captured["content"] = json["messages"][0]["content"]
+        return _openai_response()
+
+    monkeypatch.setattr(openai_adapter.httpx, "post", fake_post)
+    settings = make_settings(ai_provider="openai", openai_api_key="sk-test")
+    request = make_request(retrieved_context=(RETRIEVED_RECORD,))
+    rendered = make_rendered(request)
+
+    openai_adapter.call(request, rendered, settings)
+
+    assert captured["content"] == rendered.text
 
 
 def test_openai_adapter_timeout_raises_provider_call_failed(
@@ -196,7 +275,7 @@ def test_openai_adapter_timeout_raises_provider_call_failed(
     settings = make_settings(ai_provider="openai", openai_api_key="sk-test")
 
     with pytest.raises(ProviderCallFailed) as exc_info:
-        openai_adapter.call(make_request(), settings)
+        openai_adapter.call(make_request(), make_rendered(), settings)
     assert exc_info.value.reason == "openai_timeout"
 
 
@@ -209,7 +288,7 @@ def test_openai_adapter_http_error_raises_provider_call_failed(
     settings = make_settings(ai_provider="openai", openai_api_key="sk-test")
 
     with pytest.raises(ProviderCallFailed) as exc_info:
-        openai_adapter.call(make_request(), settings)
+        openai_adapter.call(make_request(), make_rendered(), settings)
     assert exc_info.value.reason == "openai_http_500"
 
 
@@ -232,7 +311,7 @@ def test_openai_adapter_malformed_or_missing_content_raises_provider_call_failed
     settings = make_settings(ai_provider="openai", openai_api_key="sk-test")
 
     with pytest.raises(ProviderCallFailed):
-        openai_adapter.call(make_request(), settings)
+        openai_adapter.call(make_request(), make_rendered(), settings)
 
 
 def test_openai_adapter_never_logs_or_persists_the_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -246,12 +325,47 @@ def test_openai_adapter_never_logs_or_persists_the_api_key(monkeypatch: pytest.M
     monkeypatch.setattr(openai_adapter.httpx, "post", fake_post)
     settings = make_settings(ai_provider="openai", openai_api_key="sk-super-secret")
 
-    result = openai_adapter.call(make_request(), settings)
+    result = openai_adapter.call(make_request(), make_rendered(), settings)
 
     assert "sk-super-secret" not in repr(result)
     assert "sk-super-secret" not in str(result.narrative)
     # The key is sent exactly once, as a bearer header, to the provider only.
     assert captured["headers"]["Authorization"] == "Bearer sk-super-secret"
+
+
+# --- prompt-registry provenance parity between adapters (Milestone 2.4) ----
+
+
+def test_mock_and_openai_adapters_resolve_identical_rendered_text_and_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both adapters must render through the same registry call for the
+    same request — proving they cannot silently diverge from each other."""
+    captured: dict[str, object] = {}
+
+    def fake_post(url, *, json, headers, timeout):
+        captured["content"] = json["messages"][0]["content"]
+        return _openai_response()
+
+    monkeypatch.setattr(openai_adapter.httpx, "post", fake_post)
+    request = make_request(retrieved_context=(RETRIEVED_RECORD,))
+    rendered = make_rendered(request)
+    settings = make_settings(ai_provider="openai", openai_api_key="sk-test")
+
+    mock_result = mock_adapter.call(request, rendered)
+    openai_result = openai_adapter.call(request, rendered, settings)
+
+    assert captured["content"] == rendered.text
+    for field in (
+        "prompt_id",
+        "prompt_version",
+        "prompt_status",
+        "prompt_template_hash",
+        "rendered_prompt_hash",
+    ):
+        assert (
+            getattr(mock_result, field) == getattr(openai_result, field) == getattr(rendered, field)
+        )
 
 
 # --- router: configuration vs. provider failure -----------------------------
@@ -298,6 +412,10 @@ def test_router_falls_back_to_mock_within_the_same_call_on_provider_failure(
     assert result.fallback_reason == "openai_timeout"
     # The narrative is still a valid, usable mock narrative, not empty.
     assert result.narrative
+    # Fallback still carries real prompt-registry provenance, not blanks.
+    assert result.prompt_id == "triage_narrative"
+    assert result.prompt_version == "1.0.0"
+    assert result.rendered_prompt_hash
 
 
 def test_router_configuration_error_is_never_turned_into_a_fallback(
@@ -333,8 +451,8 @@ def test_mock_adapter_produces_deterministic_structural_citations_when_evidence_
 ):
     request = make_request(retrieved_context=(RETRIEVED_RECORD,))
 
-    first = mock_adapter.call(request)
-    second = mock_adapter.call(request)
+    first = mock_adapter.call(request, make_rendered(request))
+    second = mock_adapter.call(request, make_rendered(request))
 
     assert first == second
     assert first.citations == ("issue:5756",)
@@ -342,7 +460,7 @@ def test_mock_adapter_produces_deterministic_structural_citations_when_evidence_
 
 
 def test_mock_adapter_produces_no_citations_when_nothing_was_retrieved() -> None:
-    result = mock_adapter.call(make_request())
+    result = mock_adapter.call(make_request(), make_rendered())
     assert result.citations == ()
 
 
@@ -372,7 +490,7 @@ def test_openai_adapter_accepts_a_response_that_cites_only_supplied_identifiers(
     settings = make_settings(ai_provider="openai", openai_api_key="sk-test")
     request = make_request(retrieved_context=(RETRIEVED_RECORD,))
 
-    result = openai_adapter.call(request, settings)
+    result = openai_adapter.call(request, make_rendered(request), settings)
 
     assert result.citations == ("issue:5756",)
     assert "Citations:" not in result.narrative  # the machine-readable line is stripped
@@ -392,7 +510,7 @@ def test_openai_adapter_rejects_an_invented_citation_as_a_controlled_failure(
     request = make_request(retrieved_context=(RETRIEVED_RECORD,))
 
     with pytest.raises(ProviderCallFailed):
-        openai_adapter.call(request, settings)
+        openai_adapter.call(request, make_rendered(request), settings)
 
 
 def test_router_falls_back_on_an_invented_citation(monkeypatch: pytest.MonkeyPatch) -> None:

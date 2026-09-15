@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 import app.workflow.tasks as workflow_tasks
 from app.ai_gateway import mock_adapter
 from app.ai_gateway.contracts import STATUS_FALLBACK, AIRequest, AIResponse
+from app.ai_gateway.prompts import render_active_prompt
 from app.ai_gateway.stage import run_ai_inference_stage
 from app.models.core import (
     Analysis,
@@ -28,6 +29,7 @@ from app.models.core import (
     Repository,
     StageAttempt,
 )
+from app.retrieval.contracts import RetrievedRecord
 from app.triage import rules as triage_rules
 from app.triage.service import status_history
 from app.workflow.tasks import process_workflow_run
@@ -303,6 +305,68 @@ def test_ai_inference_stage_records_one_routing_audit_event_with_mock_provenance
     assert content["ai_inference"]["input_tokens"] == 0
     assert content["ai_inference"]["estimated_cost_usd"] == 0.0
 
+    # Prompt-registry provenance (Milestone 2.4): identical on the AuditEvent
+    # and on the persisted Recommendation content, never diverging.
+    for field in (
+        "prompt_id",
+        "prompt_version",
+        "prompt_status",
+        "prompt_template_hash",
+        "rendered_prompt_hash",
+    ):
+        assert events[0].metadata_[field] == content["ai_inference"][field]
+    assert content["ai_inference"]["prompt_id"] == "triage_narrative"
+    assert content["ai_inference"]["prompt_version"] == "1.0.0"
+    assert content["ai_inference"]["prompt_status"] == "released"
+
+
+def test_prompt_input_is_already_durably_reproducible_from_persisted_recommendation_content(
+    database_session: Session,
+) -> None:
+    """Confirms exact-input traceability without adding a new
+    `prompt_input_snapshot` field: the typed inputs that produced the
+    rendered prompt (classification, evidence, assessment, proposed
+    action, retrieved context) are already fully reconstructable, field
+    for field, from the same `Recommendation.content` JSON persisted
+    today. Re-rendering those reconstructed inputs through the *same*
+    registered (immutable) prompt version reproduces the exact
+    `rendered_prompt_hash` that was recorded at the time."""
+    issue = add_issue(database_session)
+    analysis = start_analysis(database_session, issue)
+
+    result = process_workflow_run(database_session, analysis.id)
+    assert result.status == "completed"
+
+    recommendation = database_session.query(Recommendation).filter_by(analysis_id=analysis.id).one()
+    content = json.loads(recommendation.content)
+
+    reconstructed_classification = triage_rules.Classification(
+        label=content["classification"]["label"],
+        matched_rule=content["classification"]["matched_rule"],
+        matched_keywords=tuple(content["classification"]["matched_keywords"]),
+    )
+    reconstructed_evidence = tuple(
+        triage_rules.EvidenceItem(**item) for item in content["evidence"]
+    )
+    reconstructed_assessment = triage_rules.Assessment(**content["assessment"])
+    reconstructed_proposed_action = triage_rules.ProposedAction(**content["proposed_action"])
+    reconstructed_retrieved_context = tuple(
+        RetrievedRecord(**item) for item in content["retrieved_evidence"]["items"]
+    )
+
+    reconstructed_request = AIRequest(
+        task="triage_narrative",
+        classification=reconstructed_classification,
+        evidence=reconstructed_evidence,
+        assessment=reconstructed_assessment,
+        proposed_action=reconstructed_proposed_action,
+        retrieved_context=reconstructed_retrieved_context,
+    )
+    replayed = render_active_prompt(content["ai_inference"]["prompt_id"], reconstructed_request)
+
+    assert replayed.rendered_prompt_hash == content["ai_inference"]["rendered_prompt_hash"]
+    assert replayed.prompt_template_hash == content["ai_inference"]["prompt_template_hash"]
+
 
 def test_workflow_completes_with_a_deterministic_result_when_the_provider_is_unavailable(
     database_session: Session, monkeypatch: pytest.MonkeyPatch
@@ -317,21 +381,25 @@ def test_workflow_completes_with_a_deterministic_result_when_the_provider_is_una
         issue_arg, classification, evidence, assessment, proposed_action, retrieved_context=()
     ):
         del issue_arg, retrieved_context
-        fallback = mock_adapter.call(
-            AIRequest(
-                task="triage_narrative",
-                classification=classification,
-                evidence=evidence,
-                assessment=assessment,
-                proposed_action=proposed_action,
-            )
+        request = AIRequest(
+            task="triage_narrative",
+            classification=classification,
+            evidence=evidence,
+            assessment=assessment,
+            proposed_action=proposed_action,
         )
+        rendered = render_active_prompt("triage_narrative", request)
+        fallback = mock_adapter.call(request, rendered)
         return AIResponse(
             narrative=fallback.narrative,
             status=STATUS_FALLBACK,
             provider=fallback.provider,
             model=fallback.model,
-            prompt_name=fallback.prompt_name,
+            prompt_id=fallback.prompt_id,
+            prompt_version=fallback.prompt_version,
+            prompt_status=fallback.prompt_status,
+            prompt_template_hash=fallback.prompt_template_hash,
+            rendered_prompt_hash=fallback.rendered_prompt_hash,
             input_tokens=0,
             output_tokens=0,
             estimated_cost_usd=0.0,
@@ -416,6 +484,13 @@ def test_a_killed_worker_redelivered_after_ai_inference_succeeds_does_not_call_t
         .all()
     )
     assert routing_events == []
+    # Resume must never rewrite persisted prompt provenance either — the
+    # recommendation still reflects exactly the original ai_response's
+    # values, not a second, possibly-inconsistent render.
+    recommendation = database_session.query(Recommendation).filter_by(analysis_id=analysis.id).one()
+    content = json.loads(recommendation.content)
+    assert content["ai_inference"]["rendered_prompt_hash"] == ai_response.rendered_prompt_hash
+    assert content["ai_inference"]["prompt_version"] == ai_response.prompt_version
 
 
 def test_retrieval_stage_records_one_audit_event_and_bounds_the_ai_context(
