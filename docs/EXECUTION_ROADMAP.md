@@ -332,7 +332,14 @@ Acceptance:
 
 ### Milestone 2.7 — Release 2 verification
 
+**Status:** Complete — approved by Jesse.
+
 **Release 2 exit:** Evaluation thresholds pass, a provider failure recovers safely, an injection attempt fails safely, and human approval remains mandatory.
+
+**Release 2 status:** Complete — approved by Jesse. All four exit criteria demonstrated together,
+through the real production code paths, in one focused acceptance file plus a live browser
+ownership run (see Current Project State and [R2-07](REQUIREMENT_TRACEABILITY.md) for full
+evidence).
 
 ---
 
@@ -467,8 +474,8 @@ At the end of every work session, update the Current Project State below. Do not
 
 ## 11. Current Project State
 
-**Current release:** Release 2 — AI architecture
-**Current milestone:** Milestone 2.7 — Release 2 verification (not started)
+**Current release:** Release 3 — Enterprise hardening
+**Current milestone:** Milestone 3.1 — Multi-tenancy and roles (not started)
 **Status:** Release 1 — Product foundation is complete. Milestones 2.1–2.5 are complete (Jesse
 approved all five): a provider-neutral AI gateway with deterministic fallback (ADR 0008);
 repository-grounded pgvector retrieval with a calibrated two-band confidence model, disclosed
@@ -523,12 +530,73 @@ oversized, and timeout provider cases safely triggered fallback; prompt and reda
 survived fallback; no `HumanDecision` was created; no tool/action execution occurred; baseline
 comparison PASS; exit code 0. Jesse reviewed this run and explicitly approved Milestone 2.6 as
 complete.
-**Last approved decision:** Milestone 2.6 — Guardrails and AI security (ADR 0012: untrusted-data
-prompt framing as risk reduction not immunity, versioned/hash-pinned redaction policy with
-historical replay, Section D's 15 deterministic adversarial cases, atomic Redis-backed rate
-limiting with a documented fail-open tradeoff, bounded state-changing request fields) approved
+
+Milestone 2.7 — Release 2 verification is complete (Jesse approved), and with it, **Release 2 —
+AI architecture is complete**. A new acceptance file (`backend/tests/test_release2_acceptance.py`,
+11 tests) proves the roadmap's own Release 2 exit criteria hold together through the real
+production code paths in one run: Section A calls the real `python -m app.evaluation` entry point
+and confirms Sections A/B/C/D all pass with no blocking regression, exit code 0, and baseline
+comparison PASS; Section B drives a real, simulated OpenAI timeout through the actual API ->
+Celery-eager workflow -> router -> adapter path (`httpx.post` monkeypatched before any request is
+built, never a real network call) and confirms the analysis completes with AI-inference status
+`fallback`, a bounded reason, and full prompt/redaction provenance intact; Section C proves
+current-issue and retrieved-context injection attempts stay data (never instructions), a
+fabricated citation is rejected, a synthetic secret is redacted from provider-bound/model-generated
+content while the original evidence snapshot legitimately remains unredacted by design, and no
+`HumanDecision`/tool execution ever results — explicitly documented as proving *this application's*
+guardrail boundaries under a deterministic/mock provider, not universal real-model
+prompt-injection immunity; Section D proves the human-approval boundary end to end, including the
+existing 409 conflict contract for a second, conflicting decision. An intentional, temporary
+in-memory redaction bypass was demonstrated to fail the acceptance test with the exact predicted
+assertion, then reverted with zero net source diff, proving the suite is meaningful rather than
+permanently green. Full backend suite: 398/398 passed against isolated PostgreSQL/Redis (up from
+385, after a CI-portability correction added two cross-platform hashing regression tests -- see
+below); ruff format/lint clean; `git diff --check` clean; Compose configuration validated.
+
+GitHub Actions initially failed on this work (6 failures, `BaselineIncompatibleError:
+adversarial_fixture_hash differs from the checked-in baseline`) even though the same evaluation run
+passed locally on Windows. Root cause, confirmed with exact computed hashes rather than assumed:
+`adversarial_cases.json` was authored via a Windows text-mode file write (introducing CRLF line
+endings into the working-tree copy); Git's `core.autocrlf=true` normalized the *committed blob* to
+LF without rewriting the working tree, so the checked-in baseline's fixture hash (computed from the
+Windows CRLF bytes) never matched what a Linux CI checkout of the same, semantically-unchanged blob
+(LF) computed. The fix is a new `app.evaluation.canonical.canonical_json_hash`, applied consistently
+to both fixture fingerprints (`fixed_cases.json` and `adversarial_cases.json`): it hashes a
+canonical re-serialization of the *parsed* JSON, never raw file bytes, so line endings, indentation,
+and key order can never again change the hash while any real content change still does. The
+resulting baseline diff was exactly the two hash values -- no metric, case count, or expected
+outcome changed. GitHub Actions is green for the corrected commit
+(`997eddea7cdc9dfac3f99776536cfcdc3d33a964`).
+
+Jesse's first live browser ownership run showed `Prompt: triage_narrative@1.0.0` instead of the
+expected `1.1.0`. Read-only diagnosis (no source change) found the cause: the running `api`/`worker`
+Docker containers were built from an image over a day older than the Milestone 2.6 commit that
+introduced `1.1.0`, and had never been rebuilt since. Only the `api` and `worker` services were
+rebuilt and recreated from current source; PostgreSQL, Redis, and the frontend were never touched.
+Both containers then confirmed active prompt `triage_narrative@1.1.0` and active redaction policy
+`provider_input_redaction@1.0.0`. Jesse's subsequent live run confirmed: `Provider: mock
+(deterministic-v1)`; `Prompt: triage_narrative@1.1.0`; repository-grounded citations; deterministic
+evidence displayed separately from the AI-generated inference; no automatic `HumanDecision`; and
+working Approve/Reject/Request-revision controls. Demo integrity throughout every step of this
+milestone: exactly 100 issues, 405 retrieval chunks, migration head `20260916_0004`, all five
+services healthy, `AI_PROVIDER=mock`/`EMBEDDING_PROVIDER=local`, and zero paid provider calls.
+
+Accepted, disclosed limitations carried forward (not claimed solved): deterministic/mock
+adversarial tests prove this application's own guardrail boundary behavior, not universal
+real-model prompt-injection immunity; redaction covers only the three documented high-confidence
+secret patterns; the original imported evidence snapshot remains unredacted by design (a
+deliberate scope boundary, not an oversight); the retrieval-policy evaluation remains a small,
+frozen sample and retains the accepted #6139 polysemy limitation; rate limiting is IP-keyed and
+fails open if Redis is unavailable. No Release 3 capability (multi-tenancy, roles,
+backend-enforced permissions, append-only auditability, observability, security hardening,
+containerized cloud delivery) has been implemented yet.
+
+**Last approved decision:** Milestone 2.7 — Release 2 verification, and Release 2 — AI architecture
+as a whole (Release 2 exit criteria demonstrated together via
+`backend/tests/test_release2_acceptance.py`; CI-portability defect diagnosed and corrected via
+canonical fixture hashing; stale `api`/`worker` Docker images diagnosed and refreshed) approved
 complete by Jesse.
-**Next action:** Begin Milestone 2.7 — Release 2 verification.
+**Next action:** Begin Milestone 3.1 — Multi-tenancy and roles.
 **Blockers:** None identified.
 
 **Ownership follow-up:** Review remaining technical ownership topics when their corresponding components are implemented.
