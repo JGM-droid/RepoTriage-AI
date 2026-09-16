@@ -8,7 +8,7 @@ class RepositoryRecord(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    tenant_id: UUID | None
+    tenant_id: UUID  # Milestone 3.1 Slice 1: enforced non-null organization FK
     name: str
     source_url: str
     created_at: datetime

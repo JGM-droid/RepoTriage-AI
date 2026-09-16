@@ -475,7 +475,7 @@ At the end of every work session, update the Current Project State below. Do not
 ## 11. Current Project State
 
 **Current release:** Release 3 — Enterprise hardening
-**Current milestone:** Milestone 3.1 — Multi-tenancy and roles (not started)
+**Current milestone:** Milestone 3.1 — Multi-tenancy and roles (in progress — Slice 1 of 2 complete)
 **Status:** Release 1 — Product foundation is complete. Milestones 2.1–2.5 are complete (Jesse
 approved all five): a provider-neutral AI gateway with deterministic fallback (ADR 0008);
 repository-grounded pgvector retrieval with a calibrated two-band confidence model, disclosed
@@ -591,12 +591,54 @@ fails open if Redis is unavailable. No Release 3 capability (multi-tenancy, role
 backend-enforced permissions, append-only auditability, observability, security hardening,
 containerized cloud delivery) has been implemented yet.
 
-**Last approved decision:** Milestone 2.7 — Release 2 verification, and Release 2 — AI architecture
-as a whole (Release 2 exit criteria demonstrated together via
-`backend/tests/test_release2_acceptance.py`; CI-portability defect diagnosed and corrected via
-canonical fixture hashing; stale `api`/`worker` Docker images diagnosed and refreshed) approved
-complete by Jesse.
-**Next action:** Begin Milestone 3.1 — Multi-tenancy and roles.
+Milestone 3.1 — Multi-tenancy and roles, Slice 1 — organization/tenant data-model foundation, is
+complete and Jesse-approved. This slice is a **data-model foundation only**; it does not implement
+request identity, authentication, role enforcement, or API-level tenant scoping. Critical Gate G4
+("Automated negative tests prove cross-tenant records and vector results are inaccessible")
+**remains open**. [ADR 0013](adr/0013-organization-tenant-data-model.md) adds an `Organization`
+model and migration `20260917_0005`, converting `Repository.tenant_id` (a bare, unenforced, nullable
+UUID reserved by ADR 0005 since migration 0001) into a real PostgreSQL foreign key
+(`ON DELETE RESTRICT`, not cascading) that is `NOT NULL`. Two deterministic, well-known
+organizations are seeded — never randomly generated — so every reference to "the default org" or
+"the isolation org" resolves identically everywhere: the default organization (id `...0101`), which
+owns every pre-existing repository via an idempotent backfill, and an empty isolation-demo
+organization (id `...0102`) that exists solely to make a second, real tenant provably present for
+later cross-tenant negative tests. `Repository.tenant_id` keeps a server-side default of the
+default organization so every existing construction path (the importer, every existing test
+fixture) needed zero changes — this default is **temporary Slice 1 compatibility behavior only**;
+Slice 2 must make every repository-creation path pass an explicit tenant, and the default **must be
+removed before Critical Gate G4 can be considered satisfied**, with a Slice 2 test proving a missing
+tenant context fails closed rather than silently defaulting. The migration's `downgrade()` is
+guarded: it inspects for any organization beyond the two deterministic built-ins before making any
+schema change and refuses (raising `DowngradeWouldDestroyTenantDataError`, before dropping the
+foreign key or the `organizations` table) rather than silently destroying or unowning a custom
+organization's data — proven for both an empty custom organization and one already owning a
+repository, in both cases leaving `alembic_version`, every organization/repository row, and the full
+downstream record chain completely unchanged. Verified: 17/17 focused organization/migration tests
+passed (11 model/constraint tests in `test_organizations.py`, 6 migration/backfill/downgrade-guard
+tests in `test_migration_0005_organizations.py`); full backend suite 415/415 passed against isolated
+PostgreSQL/Redis; a fresh empty-database upgrade through 0005, a deterministic-only
+downgrade-then-upgrade cycle, and both guarded-downgrade refusals were all exercised as automated
+tests; ruff format/lint clean; `git diff --check` clean; Compose configuration validated. The
+migration was then applied to the live demo database (`20260916_0004` -> `20260917_0005`) after a
+verified `pg_dump` backup (removed once verification succeeded); read-only post-migration checks
+confirmed exactly two deterministic organizations with their expected ids/slugs/names, every
+existing repository owned by the default organization with no null `tenant_id`, the isolation-demo
+organization owning zero repositories, unchanged repository ids, and unchanged counts (100 issues,
+405 retrieval chunks, 21 analyses, 21 recommendations, 1 human decision, 91 stage attempts, 80 audit
+events) and prompt/redaction provenance (`triage_narrative@1.1.0`, `provider_input_redaction@1.0.0`)
+before and after. Only the `api` and `worker` containers were rebuilt and recreated from the
+verified source; PostgreSQL, Redis, and the frontend were never touched. Jesse explicitly approved
+Slice 1 as complete and authorized the live migration.
+
+Slice 2 — request identity and backend-enforced tenant scoping (viewer/reviewer/administrator
+roles, API-level tenant filtering, and the cross-tenant negative-test suite covering records,
+vectors, analyses, and traces that Critical Gate G4 requires) — is next and has not been started.
+
+**Last approved decision:** Milestone 3.1 Slice 1 — organization/tenant data-model foundation
+(ADR 0013, migration `20260917_0005`) — approved complete by Jesse, including authorization to
+apply the migration to the live demo database.
+**Next action:** Begin Milestone 3.1 Slice 2 — request identity and backend-enforced tenant scoping.
 **Blockers:** None identified.
 
 **Ownership follow-up:** Review remaining technical ownership topics when their corresponding components are implemented.

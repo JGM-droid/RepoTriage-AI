@@ -1,7 +1,15 @@
 from uuid import UUID
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -12,13 +20,55 @@ from app.models.base import Base, UUIDTimestampMixin
 # model/config mismatch fails clearly instead of corrupting the index.
 EMBEDDING_DIMENSION = 384
 
+# Deterministic, well-known organization ids (Milestone 3.1 Slice 1; see ADR
+# 0013). Never randomly generated -- fixed literals so migration 0005's data
+# backfill, `Repository.tenant_id`'s server-side default below, and every
+# test referencing them all agree on the exact same rows, forever.
+# `DEFAULT_ORGANIZATION_ID` owns every repository that existed before
+# Milestone 3.1 (backfilled by the migration) and every repository created
+# without an explicit organization since (via the server_default) --
+# preserving today's single-tenant behavior unchanged for the importer and
+# every existing test. `ISOLATION_DEMO_ORGANIZATION_ID` deliberately owns no
+# repository data yet; it exists only so a second, real organization is
+# provably present for cross-tenant negative tests (this slice and beyond).
+DEFAULT_ORGANIZATION_ID = UUID("00000000-0000-0000-0000-000000000101")
+ISOLATION_DEMO_ORGANIZATION_ID = UUID("00000000-0000-0000-0000-000000000102")
+
+
+class Organization(UUIDTimestampMixin, Base):
+    """The tenant boundary every other row ultimately scopes to via
+    `Repository.tenant_id` (see ADR 0005's original reservation of that
+    column, and ADR 0013 for this table's own design). Deliberately
+    minimal: no billing, plans, domains, SSO, or settings fields -- nothing
+    this milestone's slices actually need yet."""
+
+    __tablename__ = "organizations"
+
+    slug: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    repositories: Mapped[list["Repository"]] = relationship(back_populates="organization")
+
 
 class Repository(UUIDTimestampMixin, Base):
     __tablename__ = "repositories"
 
-    tenant_id: Mapped[UUID | None] = mapped_column(index=True)
+    # Milestone 3.1 Slice 1: a real, PostgreSQL-enforced organization
+    # foreign key (was a bare, unenforced nullable UUID reserved by ADR
+    # 0005). RESTRICT, not CASCADE, on delete: an organization can never be
+    # removed while it still owns repositories -- and therefore issues,
+    # analyses, and every other downstream record -- see ADR 0013.
+    # `server_default` assigns any repository created without an explicit
+    # organization to the deterministic default org, so the existing
+    # importer and every existing test construct valid rows unchanged.
+    tenant_id: Mapped[UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="RESTRICT"),
+        nullable=False,
+        server_default=text(f"'{DEFAULT_ORGANIZATION_ID}'::uuid"),
+        index=True,
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     source_url: Mapped[str] = mapped_column(String(2048), nullable=False, unique=True)
+    organization: Mapped["Organization"] = relationship(back_populates="repositories")
     issues: Mapped[list["Issue"]] = relationship(back_populates="repository")
     documents: Mapped[list["RepositoryDocument"]] = relationship(back_populates="repository")
     audit_events: Mapped[list["AuditEvent"]] = relationship(back_populates="repository")
