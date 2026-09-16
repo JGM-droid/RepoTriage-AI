@@ -22,17 +22,28 @@ comparison logic -- kept in three explicitly separated sections (ADR
      validation/fallback behavior. This never re-derives what retrieval
      *should* have returned -- see section B for that.
 
+  D. Adversarial-guardrail metrics (`AdversarialMetrics`) -- from
+     `app.evaluation.adversarial`, a versioned fixture of prompt-injection,
+     fabricated-citation, malformed/oversized-output, secret-redaction, and
+     resource-exhaustion cases, run through the same real production code
+     as A/C. These are deterministic checks against this application's own
+     guardrail code, run only against the mock provider and a
+     monkeypatched simulation of the OpenAI adapter's HTTP boundary -- see
+     `ADVERSARIAL_ROBUSTNESS_DISCLAIMER`. They never re-derive retrieval
+     selection (see B) and never assert a subjective "the model was not
+     influenced" property.
+
 Blocking policy: for exact-match deterministic properties (classification/
 severity/action agreement, required/forbidden citations, citation
-validity, mock cost, and retrieval-policy accept/reject outcomes for
-non-limitation cases), the threshold is "no regression from the checked-in
-baseline" -- not an arbitrary numeric tolerance -- because the underlying
-logic is deterministic rule-based code, not a statistical model: any
-deviation is a real defect, not noise. Narrative-rule violations, latency,
-and token/cost totals beyond the zero-cost invariant are always
-observational -- included in the report, never blocking. The #6139
-known-limitation retrieval-policy case is always informational, in either
-direction, regardless of section.
+validity, mock cost, retrieval-policy accept/reject outcomes for
+non-limitation cases, and every adversarial-guardrail case in section D),
+the threshold is "no regression from the checked-in baseline" -- not an
+arbitrary numeric tolerance -- because the underlying logic is
+deterministic rule-based code, not a statistical model: any deviation is a
+real defect, not noise. Narrative-rule violations, latency, and token/cost
+totals beyond the zero-cost invariant are always observational -- included
+in the report, never blocking. The #6139 known-limitation retrieval-policy
+case is always informational, in either direction, regardless of section.
 """
 
 from __future__ import annotations
@@ -40,6 +51,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 
 from app.ai_gateway.prompts import get_active_prompt
+from app.evaluation.adversarial import (
+    ADVERSARIAL_ROBUSTNESS_DISCLAIMER,
+    AdversarialFixture,
+    AdversarialResult,
+)
 from app.evaluation.contracts import CaseResult, EvaluationFixture
 from app.evaluation.retrieval_policy import RetrievalPolicyFixture, RetrievalPolicyResult
 
@@ -177,6 +193,35 @@ def compute_retrieval_policy_metrics(
     )
 
 
+# --- D: adversarial-guardrail metrics (app.evaluation.adversarial) ---------
+
+
+@dataclass(frozen=True)
+class AdversarialMetrics:
+    """The only section that says anything about adversarial-guardrail
+    behavior: prompt-injection framing, fabricated-citation rejection,
+    malformed/oversized-output fallback, secret redaction, and
+    resource-exhaustion handling. Every case is deterministic and blocking
+    -- there is no known-limitation carve-out here."""
+
+    total_cases: int
+    passed_cases: int
+    failed_cases: int
+    redaction_event_count: int
+    fallback_event_count: int
+
+
+def compute_adversarial_metrics(results: tuple[AdversarialResult, ...]) -> AdversarialMetrics:
+    passed = sum(1 for r in results if r.passed)
+    return AdversarialMetrics(
+        total_cases=len(results),
+        passed_cases=passed,
+        failed_cases=len(results) - passed,
+        redaction_event_count=sum(len(r.redaction_events) for r in results),
+        fallback_event_count=sum(1 for r in results if r.fallback_occurred),
+    )
+
+
 # --- consolidated report ------------------------------------------------------
 
 
@@ -203,6 +248,9 @@ class EvaluationReport:
     triage_narrative_metrics: TriageNarrativeMetrics
     retrieval_policy_results: tuple[RetrievalPolicyResult, ...]
     retrieval_policy_metrics: RetrievalPolicyMetrics
+    adversarial_fixture_hash: str
+    adversarial_results: tuple[AdversarialResult, ...]
+    adversarial_metrics: AdversarialMetrics
     known_limitations: tuple[str, ...]
     generated_by_command: str
 
@@ -213,9 +261,13 @@ def build_report(
     results: tuple[CaseResult, ...],
     retrieval_policy_fixture: RetrievalPolicyFixture,
     retrieval_policy_results: tuple[RetrievalPolicyResult, ...],
+    adversarial_fixture: AdversarialFixture,
+    adversarial_fixture_hash: str,
+    adversarial_results: tuple[AdversarialResult, ...],
     *,
     command: str,
 ) -> EvaluationReport:
+    del adversarial_fixture  # only its hash and results are part of the report
     active_prompt = get_active_prompt("triage_narrative")
     known_limitations = tuple(
         r.case_id for r in (*results, *retrieval_policy_results) if r.known_limitation
@@ -236,6 +288,9 @@ def build_report(
         triage_narrative_metrics=compute_triage_narrative_metrics(results),
         retrieval_policy_results=retrieval_policy_results,
         retrieval_policy_metrics=compute_retrieval_policy_metrics(retrieval_policy_results),
+        adversarial_fixture_hash=adversarial_fixture_hash,
+        adversarial_results=adversarial_results,
+        adversarial_metrics=compute_adversarial_metrics(adversarial_results),
         known_limitations=known_limitations,
         generated_by_command=command,
     )
@@ -354,6 +409,36 @@ def compare(baseline: dict, candidate: EvaluationReport) -> ComparisonResult:
         elif not base_passed and not rp_result.passed:
             notes.append(f"[retrieval-policy] {rp_result.case_id}: still failing in both")
 
+    # --- D: adversarial-guardrail case-level comparison (all blocking) -------
+    if baseline.get("adversarial_fixture_hash") != candidate.adversarial_fixture_hash:
+        raise BaselineIncompatibleError(
+            "the adversarial-guardrail fixture changed (adversarial_fixture_hash differs "
+            "from the checked-in baseline) without an intentional baseline review -- run "
+            "`python -m app.evaluation --update-baseline` only after reviewing why the "
+            "fixture changed, then commit the resulting baseline diff for review."
+        )
+    baseline_adv_ids = {c["case_id"] for c in baseline.get("adversarial_results", [])}
+    candidate_adv_ids = {r.case_id for r in candidate.adversarial_results}
+    if baseline_adv_ids != candidate_adv_ids:
+        raise BaselineIncompatibleError(
+            "adversarial-guardrail case set changed: missing from candidate="
+            f"{sorted(baseline_adv_ids - candidate_adv_ids)!r}, new in candidate="
+            f"{sorted(candidate_adv_ids - baseline_adv_ids)!r} -- the fixture changed or not "
+            "all adversarial cases ran; review and update the baseline explicitly if "
+            "intentional."
+        )
+    baseline_adv_by_id = {c["case_id"]: c for c in baseline["adversarial_results"]}
+    for adv_result in candidate.adversarial_results:
+        base = baseline_adv_by_id[adv_result.case_id]
+        base_passed = not base.get("blocking_failures")
+        if base_passed and not adv_result.passed:
+            regressions.append(
+                f"[adversarial] {adv_result.case_id}: passed in baseline, now failing: "
+                f"{list(adv_result.blocking_failures)}"
+            )
+        elif not base_passed and not adv_result.passed:
+            notes.append(f"[adversarial] {adv_result.case_id}: still failing in both")
+
     # --- provenance notes (never regressions by themselves) ------------------
     if candidate.prompt_version != baseline.get(
         "prompt_version"
@@ -443,15 +528,37 @@ def format_human_summary(
         f"{tn.failed_cases} failed, {tn.known_limitation_cases} known limitation(s)"
     )
 
+    adv = candidate.adversarial_metrics
+    lines.append("")
+    lines.append(
+        "D. Adversarial-guardrail regression (app.evaluation.adversarial -- prompt "
+        "injection, fabricated citations, malformed/oversized output, secret "
+        "redaction, resource exhaustion; every case is deterministic and blocking):"
+    )
+    lines.append(
+        f"   {adv.total_cases} case(s), {adv.passed_cases} passed, {adv.failed_cases} failed   "
+        f"redaction events: {adv.redaction_event_count}   fallback events: "
+        f"{adv.fallback_event_count}   prompt: {candidate.prompt_id}@{candidate.prompt_version}"
+    )
+    for r in candidate.adversarial_results:
+        marker = "PASS" if r.passed else "FAIL"
+        lines.append(
+            f"   [{marker}] {r.case_id} ({r.category}): redaction={list(r.redaction_events)} "
+            f"fallback={r.fallback_occurred}"
+        )
+    lines.append(f"   {ADVERSARIAL_ROBUSTNESS_DISCLAIMER}")
+
     if candidate.known_limitations:
         lines.append("")
         lines.append("Known, disclosed limitations (nonblocking, tracked for visibility):")
         for case_id in candidate.known_limitations:
             lines.append(f"  - {case_id}")
 
-    all_blocking = [(r.case_id, f) for r in candidate.case_results for f in r.blocking_failures] + [
-        (r.case_id, f) for r in candidate.retrieval_policy_results for f in r.blocking_failures
-    ]
+    all_blocking = (
+        [(r.case_id, f) for r in candidate.case_results for f in r.blocking_failures]
+        + [(r.case_id, f) for r in candidate.retrieval_policy_results for f in r.blocking_failures]
+        + [(r.case_id, f) for r in candidate.adversarial_results for f in r.blocking_failures]
+    )
     if all_blocking:
         lines.append("")
         lines.append("Blocking failures:")

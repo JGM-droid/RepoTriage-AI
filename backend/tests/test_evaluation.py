@@ -13,6 +13,7 @@ from dataclasses import replace
 
 import pytest
 
+from app.evaluation.adversarial import load_adversarial_fixture, run_all_adversarial_cases
 from app.evaluation.cases import DEFAULT_FIXTURE_PATH, fixture_content_hash, load_fixture
 from app.evaluation.contracts import EvaluationCase, EvaluationFixture, SuppliedRetrievedRecord
 from app.evaluation.report import (
@@ -29,23 +30,28 @@ from app.evaluation.runner import run_all, run_case
 
 DEFAULT_BASELINE_PATH = DEFAULT_FIXTURE_PATH.parent / "baseline.json"
 
-# The real retrieval-policy fixture/results are cheap (six in-memory
-# replays, zero network) and identical for every test in this module, so
-# they are computed once here rather than per-test.
+# The real retrieval-policy and adversarial fixtures/results are cheap
+# (in-memory replays, zero network) and identical for every test in this
+# module, so they are computed once here rather than per-test.
 _REAL_RETRIEVAL_POLICY_FIXTURE = load_retrieval_policy_fixture()
 _REAL_RETRIEVAL_POLICY_RESULTS = run_all_retrieval_policy_cases(_REAL_RETRIEVAL_POLICY_FIXTURE)
+_REAL_ADVERSARIAL_FIXTURE, _REAL_ADVERSARIAL_FIXTURE_HASH = load_adversarial_fixture()
+_REAL_ADVERSARIAL_RESULTS = run_all_adversarial_cases(_REAL_ADVERSARIAL_FIXTURE)
 
 
 def _build_report(fixture, fixture_hash, results, *, command="test"):
-    """Wraps `build_report`, filling in the real retrieval-policy fixture/
-    results so existing stage A/C-focused tests don't need to repeat that
-    boilerplate at every call site."""
+    """Wraps `build_report`, filling in the real retrieval-policy and
+    adversarial fixtures/results so existing stage A/C-focused tests don't
+    need to repeat that boilerplate at every call site."""
     return build_report(
         fixture,
         fixture_hash,
         results,
         _REAL_RETRIEVAL_POLICY_FIXTURE,
         _REAL_RETRIEVAL_POLICY_RESULTS,
+        _REAL_ADVERSARIAL_FIXTURE,
+        _REAL_ADVERSARIAL_FIXTURE_HASH,
+        _REAL_ADVERSARIAL_RESULTS,
         command=command,
     )
 
@@ -286,7 +292,7 @@ def test_candidate_report_includes_prompt_and_provider_provenance() -> None:
     assert report.provider == "mock"
     assert report.model == "deterministic-v1"
     assert report.prompt_id == "triage_narrative"
-    assert report.prompt_version == "1.0.0"
+    assert report.prompt_version == "1.1.0"
     assert len(report.prompt_template_hash) == 64
     for result in report.case_results:
         assert len(result.rendered_prompt_hash) == 64

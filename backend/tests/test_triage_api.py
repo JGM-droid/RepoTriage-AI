@@ -90,6 +90,21 @@ def test_start_triage_returns_202_without_waiting_for_completion(
     assert "analysis_id" in payload
 
 
+def test_an_oversized_ruleset_version_is_rejected_safely(
+    client: TestClient, database_session: Session
+) -> None:
+    """Milestone 2.6: TriageRequest.ruleset_version is now bounded --
+    proves the bound is enforced (422) and the error body stays safe
+    (no stack trace, no internal representation)."""
+    issue = add_issue(database_session)
+
+    response = client.post(f"/api/v1/issues/{issue.id}/triage", json={"ruleset_version": "9" * 21})
+
+    assert response.status_code == 422
+    assert "Traceback" not in response.text
+    assert "site-packages" not in response.text
+
+
 def test_polling_after_start_returns_the_completed_result_with_separated_sections(
     client: TestClient, database_session: Session
 ) -> None:
@@ -149,10 +164,19 @@ def test_polling_after_start_returns_the_completed_result_with_separated_section
     # for technical inspection, even though the frontend's normal UI only
     # surfaces prompt_id/prompt_version, not the hashes.
     assert payload["ai_inference"]["prompt_id"] == "triage_narrative"
-    assert payload["ai_inference"]["prompt_version"] == "1.0.0"
+    assert payload["ai_inference"]["prompt_version"] == "1.1.0"
     assert payload["ai_inference"]["prompt_status"] == "released"
     assert len(payload["ai_inference"]["prompt_template_hash"]) == 64  # sha256 hex digest
     assert len(payload["ai_inference"]["rendered_prompt_hash"]) == 64
+
+    # Redaction-policy provenance (Milestone 2.6 correction) is exposed the
+    # same way -- always present, even with zero events, so "nothing was
+    # redacted" is attributable to a specific policy version via the API.
+    assert payload["ai_inference"]["redaction_events"] == []
+    assert payload["ai_inference"]["redaction_policy_id"] == "provider_input_redaction"
+    assert payload["ai_inference"]["redaction_policy_version"] == "1.0.0"
+    assert payload["ai_inference"]["redaction_policy_status"] == "released"
+    assert len(payload["ai_inference"]["redaction_policy_hash"]) == 64
 
 
 def test_get_triage_is_backward_compatible_with_pre_2_3_recommendations(

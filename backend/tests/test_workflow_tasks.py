@@ -316,7 +316,7 @@ def test_ai_inference_stage_records_one_routing_audit_event_with_mock_provenance
     ):
         assert events[0].metadata_[field] == content["ai_inference"][field]
     assert content["ai_inference"]["prompt_id"] == "triage_narrative"
-    assert content["ai_inference"]["prompt_version"] == "1.0.0"
+    assert content["ai_inference"]["prompt_version"] == "1.1.0"
     assert content["ai_inference"]["prompt_status"] == "released"
 
 

@@ -28,6 +28,17 @@ jobs:
           --health-retries 10
         ports:
           - 5432:5432
+      redis:
+        # Milestone 2.6 (ADR 0012): backs the API rate limiter's fixed-window
+        # counters. Matches compose.yaml's redis:7-alpine image exactly.
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 6379:6379
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,6 +65,7 @@ jobs:
       - name: Test backend
         env:
           DATABASE_URL: postgresql+psycopg://repotriage:repotriage@localhost:5432/repotriage
+          REDIS_URL: redis://localhost:6379/0
         run: pytest backend/tests
       - name: Run evaluation regression gate
         # Milestone 2.5 / ADR 0011. Deterministic and offline only: mock AI

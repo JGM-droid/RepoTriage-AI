@@ -141,6 +141,26 @@ def test_decision_rejects_an_invalid_decision_value(
     }
 
 
+def test_an_oversized_decision_value_is_rejected_safely(
+    client: TestClient, database_session: Session
+) -> None:
+    """Milestone 2.6: TriageDecisionRequest.decision is now bounded --
+    proves the bound is enforced (422) before it would even reach
+    app.decisions.service's ALLOWED_DECISIONS check, and that the error
+    body stays safe (no stack trace, no internal representation)."""
+    issue = add_issue(database_session)
+    client.post(f"/api/v1/issues/{issue.id}/triage", json={})
+
+    response = client.post(
+        f"/api/v1/issues/{issue.id}/triage/decision",
+        json={"decision": "x" * 33},
+    )
+
+    assert response.status_code == 422
+    assert "Traceback" not in response.text
+    assert "site-packages" not in response.text
+
+
 def test_decision_returns_stable_not_found_for_missing_issue(client: TestClient) -> None:
     response = client.post(
         f"/api/v1/issues/{uuid4()}/triage/decision",

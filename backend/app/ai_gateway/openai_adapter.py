@@ -28,6 +28,7 @@ import time
 import httpx
 
 from app.ai_gateway.contracts import (
+    MAX_NARRATIVE_LENGTH,
     STATUS_SUCCEEDED,
     AIRequest,
     AIResponse,
@@ -103,6 +104,8 @@ def call(request: AIRequest, rendered: RenderedPrompt, settings: Settings) -> AI
     narrative, citations = _split_citations(raw_content)
     if not narrative:
         raise ProviderCallFailed("openai_empty_content")
+    if len(narrative) > MAX_NARRATIVE_LENGTH:
+        raise ProviderCallFailed("openai_narrative_too_long")
     response_obj = AIResponse(
         narrative=narrative,
         status=STATUS_SUCCEEDED,

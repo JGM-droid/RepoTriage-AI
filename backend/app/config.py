@@ -79,6 +79,17 @@ class Settings(BaseSettings):
     # "security" term) both sit well below it.
     retrieval_high_confidence_similarity: float = 0.90
 
+    # Rate limiting (Milestone 2.6; see app.api.rate_limit and ADR 0012).
+    # Applies only to the two state-changing endpoints (start triage, record
+    # a human decision) -- never to read-only GET endpoints. Defaults are
+    # demo-friendly: generous enough that a normal ownership walkthrough
+    # never trips them, tight enough to catch an accidental rapid-duplicate
+    # submission (e.g. a double-click or a buggy retry loop).
+    rate_limit_triage_start_max_requests: int = 20
+    rate_limit_triage_start_window_seconds: int = 60
+    rate_limit_decision_max_requests: int = 20
+    rate_limit_decision_window_seconds: int = 60
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @model_validator(mode="after")

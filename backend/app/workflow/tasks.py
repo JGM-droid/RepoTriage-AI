@@ -251,6 +251,17 @@ def _record_ai_routing_event(
                 "prompt_status": ai_response.prompt_status,
                 "prompt_template_hash": ai_response.prompt_template_hash,
                 "rendered_prompt_hash": ai_response.rendered_prompt_hash,
+                # Pattern names only (e.g. "openai_api_key") -- never the
+                # matched value itself. See app.ai_gateway.redaction. Policy
+                # id/version/status/hash are always present, even when
+                # `redaction_events` is empty, so "no redaction occurred" is
+                # attributable to a specific, historically-resolvable policy
+                # version rather than ambiguous with "no policy ran".
+                "redaction_events": list(ai_response.redaction_events),
+                "redaction_policy_id": ai_response.redaction_policy_id,
+                "redaction_policy_version": ai_response.redaction_policy_version,
+                "redaction_policy_status": ai_response.redaction_policy_status,
+                "redaction_policy_hash": ai_response.redaction_policy_hash,
             },
         )
     )

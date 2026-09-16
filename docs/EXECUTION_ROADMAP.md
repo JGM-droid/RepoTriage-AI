@@ -322,6 +322,8 @@ Acceptance:
 
 ### Milestone 2.6 — Guardrails and AI security
 
+**Status:** Complete — approved by Jesse.
+
 - Treat issue and retrieved text as untrusted data
 - Prompt-injection fixtures
 - Structured-output validation and fail-closed behavior
@@ -466,10 +468,67 @@ At the end of every work session, update the Current Project State below. Do not
 ## 11. Current Project State
 
 **Current release:** Release 2 — AI architecture
-**Current milestone:** Milestone 2.6 — Guardrails and AI security (not started)
-**Status:** Release 1 — Product foundation is complete. Milestone 2.1, Milestone 2.2, Milestone 2.3, Milestone 2.4, and Milestone 2.5 are complete (Jesse approved all five). Milestone 2.3 — Repository-grounded RAG and Milestone 2.4 — Prompt registry and traceability (summary; see [ADR 0009](adr/0009-repository-grounded-pgvector-retrieval.md)/[ADR 0010](adr/0010-prompt-registry.md) and the R2-03/R2-04 traceability rows for full detail): pgvector + a real local `BAAI/bge-small-en-v1.5` embedding model, a calibrated two-band confidence retrieval model (0.65 reject / 0.90 high-confidence, discriminative-term lexical support in between, disclosed #6139 polysemy limitation), and a code-owned, immutable, hash-pinned prompt registry (`triage_narrative@1.0.0`) shared by both AI adapters. Milestone 2.5 — Evaluation and regression harness: [ADR 0011](adr/0011-evaluation-and-regression-harness.md) adds `app/evaluation/`, a deterministic, zero-cost, zero-network regression gate covering three explicitly separated sections. **A. Deterministic triage** — `app.evaluation.runner` calls the real `classify`/`assess`/`propose` against a 19-case, versioned, checked-in fixture (`backend/tests/evaluation/fixed_cases.json`), covering security/bug/documentation/regression classification, insufficient-query/no-qualifying-evidence gates, simulated (never real-network) provider-failure and invented-citation fallback scenarios, and the disclosed #6139 limitation. **B. Retrieval-policy regression** — `app.evaluation.retrieval_policy` calls the real, current `app.retrieval.service._confidence_decision`/`_shared_discriminative_terms` selection functions directly, replayed against previously measured, frozen real-BAAI/bge-small-en-v1.5 similarity scores and bounded real query/candidate text now stored in `tests/calibration/bge_similarity_calibration.json` (extended with `query_text`/`candidate_text`/`calibration_schema_version` fields and one new entry for #6139's already-measured score — no similarity score was fabricated or re-measured). This is the only mechanism that says anything about retrieval-selection quality; `retrieval_policy_expected_accept_rate` and `retrieval_policy_forbidden_rejection_rate` name exactly what they measure, never overclaiming a general "retrieval precision." **C. Narrative/citation behavior** — the real AI gateway with a hand-supplied retrieved context proves citation validation and fallback wiring, explicitly distinct from stage B. Blocking metrics (no regression from the checked-in baseline: classification/severity/action agreement, required/forbidden citations, `citation_validity_rate` at 100%, `retrieval_policy_expected_accept_rate`/`retrieval_policy_forbidden_rejection_rate` at 100%, mock cost at exactly $0.00) versus warning-only (`narrative_rule_violations` — simple substring checks, explicitly not a semantic-factuality measurement; latency; token/cost totals). A checked-in, reviewable baseline (`backend/tests/evaluation/baseline.json`) is never regenerated silently — only `python -m app.evaluation --update-baseline` writes it, and only after the run itself has zero blocking failures; ordinary runs are read-only and never create untracked candidate-report files. `python -m app.evaluation` prints a three-section human-readable report plus an optional machine-readable JSON report (`--output`), exits 0 on a clean pass and 1 on any blocking regression, and states explicitly that it measures fixed-set behavior regression, never real-world population drift, and that stage B's evidence is frozen/previously measured, never a fresh model run. A one-line CI prerequisite was corrected as part of this milestone: `.github/workflows/ci.yml`'s Postgres service image was switched from plain `postgres:17.7-alpine` to the pinned `pgvector/pgvector:0.8.6-pg17-bookworm` image `compose.yaml` already used, since migration `20260916_0004` requires the `vector` extension the old CI image did not provide; a new "Run evaluation regression gate" CI step runs `python -m app.evaluation` with `AI_PROVIDER=mock`/`EMBEDDING_PROVIDER=fake` after the backend test step. Verified: 309 backend tests passed against a fresh isolated pgvector PostgreSQL database (migration `20260916_0004` applies cleanly against the corrected CI image; no new migration), ruff format/lint clean, `git diff --check` clean, Compose configuration validated; two independent, temporary, in-memory-only (never a checked-in file) intentional-regression demonstrations — one degrading a deterministic action mapping, one reverting the actual Milestone 2.3 false-positive fix so #5942/#5836 would be incorrectly accepted again — each produced a named, exact blocking regression and a nonzero exit code, then were fully reverted with zero file changes. No real, paid OpenAI call was made at any point. Jesse personally ran `python -m app.evaluation` and confirmed: deterministic triage metrics passed; retrieval expected-accept rate 100%; retrieval forbidden-rejection rate 100%; citation validity 100%; mock cost $0.0000; 19/19 evaluation cases passed; #6139 visibly disclosed as a known nonblocking limitation; baseline comparison PASS; exit code 0. Jesse reviewed this run and explicitly approved Milestone 2.5 and R2-05 as complete.
-**Last approved decision:** Milestone 2.5 — Evaluation and regression harness (ADR 0011: fixed-set regression distinct from population drift, checked-in reviewable baseline, three explicitly separated evaluation sections, frozen real-BGE evidence replayed through the current retrieval policy, zero-cost mock-only CI gate) approved complete by Jesse.
-**Next action:** Begin Milestone 2.6 — Guardrails and AI security.
+**Current milestone:** Milestone 2.7 — Release 2 verification (not started)
+**Status:** Release 1 — Product foundation is complete. Milestones 2.1–2.5 are complete (Jesse
+approved all five): a provider-neutral AI gateway with deterministic fallback (ADR 0008);
+repository-grounded pgvector retrieval with a calibrated two-band confidence model, disclosed
+#6139 polysemy limitation (ADR 0009); a code-owned, immutable, hash-pinned prompt registry (ADR
+0010); and a deterministic, zero-cost, zero-network evaluation/regression harness with a
+checked-in, reviewable baseline covering deterministic triage, retrieval-policy regression, and
+narrative/citation behavior (ADR 0011). Milestone 2.6 — Guardrails and AI security is complete
+(Jesse approved): [ADR 0012](adr/0012-ai-guardrails-and-adversarial-evaluation.md) treats the
+current issue's own title/body and retrieved repository evidence as untrusted data, not
+instructions — a new, hash-pinned `triage_narrative@1.1.0` prompt release frames both inside
+explicit, app-controlled `BEGIN`/`END` boundaries (the previous `triage_narrative@1.0.0` framed
+only retrieved evidence; it remains registered, unmodified, for historical inspection). This
+framing is documented and must be understood as risk reduction, not proof of injection immunity —
+a sufficiently capable adversarial model could still be misled by injected text, and nothing in
+this milestone proves real-model semantic prompt-injection resistance. Provider-neutral output/
+citation validation was extended: a 4,000-character narrative bound (`MAX_NARRATIVE_LENGTH`),
+duplicate-citation rejection, and a citation-count-vs-retrieved-context-count check, all routing
+through the existing deterministic mock-adapter fallback (ADR 0008) on any violation. A new,
+versioned, hash-pinned redaction policy (`provider_input_redaction@1.0.0`, `app.ai_gateway.
+redaction`) matches exactly three high-confidence, well-known secret formats (an OpenAI-style key,
+a GitHub personal-access token, a PEM private-key block) and redacts them from the rendered
+prompt, the outgoing provider payload, and model-influenced persisted narrative/citations —
+never from the separately-persisted original evidence/retrieved-evidence snapshot, which remains
+unredacted by design, exactly as `app.importer.sanitize`'s pre-existing import policy already
+intended. The redaction policy's ID/version/status/hash and match events are persisted alongside
+prompt provenance on every `AIResponse` (mock, real-provider, and fallback paths identically), and
+a dedicated replay test proves a historical analysis's exact `rendered_prompt_hash` remains
+reproducible even after a newer redaction-policy version becomes active. A new, versioned
+adversarial-guardrail fixture (`backend/tests/evaluation/adversarial_cases.json`, 15 cases) forms
+Section D of `python -m app.evaluation`, covering prompt injection, fabricated citations,
+malformed/empty/oversized provider output, secret redaction, resource exhaustion, the
+human-review boundary, and the absence of tool/action execution — every case deterministic and
+blocking, run through the real production code paths; the section states explicitly that these
+checks validate application guardrails and do not prove any real model resists every
+prompt-injection technique. A Redis-backed, atomically-incremented (single Lua script) fixed-window
+rate limiter now guards the two state-changing endpoints (start triage, record a human decision;
+every read-only GET endpoint is unaffected), returning HTTP 429 with `Retry-After` on a safe, flat
+error body; Redis unavailability is a documented, deliberate fail-open tradeoff (rate limiting is
+IP-keyed, with no authentication in this milestone). Two previously-unbounded state-changing
+request fields (`TriageRequest.ruleset_version`, `TriageDecisionRequest.decision`) gained
+conservative `max_length` bounds. Verified: 385/385 backend tests passed against isolated
+PostgreSQL and Redis (the live demo stack — 100 issues, 405 retrieval chunks, migration head
+`20260916_0004`, all five services healthy, `AI_PROVIDER=mock`/`EMBEDDING_PROVIDER=local` — was
+never touched); ruff format/lint clean; `git diff --check` clean; a demonstrated intentional
+guardrail regression (redaction bypassed) produced exit code 1, naming the exact failing case and
+metric; the restored, clean evaluation run produced exit code 0 with the checked-in baseline
+byte-identical throughout. No real, paid OpenAI call was made at any point. Jesse personally ran
+`python -m app.evaluation` with `AI_PROVIDER=mock`/`EMBEDDING_PROVIDER=fake` and confirmed: Section
+D adversarial guardrails 15/15 passed; prompt version `triage_narrative@1.1.0`; the
+secret-redaction case passed; a fabricated citation safely triggered fallback; malformed, empty,
+oversized, and timeout provider cases safely triggered fallback; prompt and redaction provenance
+survived fallback; no `HumanDecision` was created; no tool/action execution occurred; baseline
+comparison PASS; exit code 0. Jesse reviewed this run and explicitly approved Milestone 2.6 as
+complete.
+**Last approved decision:** Milestone 2.6 — Guardrails and AI security (ADR 0012: untrusted-data
+prompt framing as risk reduction not immunity, versioned/hash-pinned redaction policy with
+historical replay, Section D's 15 deterministic adversarial cases, atomic Redis-backed rate
+limiting with a documented fail-open tradeoff, bounded state-changing request fields) approved
+complete by Jesse.
+**Next action:** Begin Milestone 2.7 — Release 2 verification.
 **Blockers:** None identified.
 
 **Ownership follow-up:** Review remaining technical ownership topics when their corresponding components are implemented.

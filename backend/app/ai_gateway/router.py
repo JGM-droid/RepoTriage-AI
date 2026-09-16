@@ -17,6 +17,7 @@ never recomputed or duplicated per adapter.
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 
 from app.ai_gateway import mock_adapter, openai_adapter
 from app.ai_gateway.contracts import (
@@ -27,6 +28,7 @@ from app.ai_gateway.contracts import (
     ProviderCallFailed,
 )
 from app.ai_gateway.prompts import render_active_prompt
+from app.ai_gateway.redaction import redact_ai_request
 from app.config import Settings, get_settings
 
 PROVIDER_MOCK = "mock"
@@ -46,30 +48,54 @@ def ensure_ai_gateway_configured(settings: Settings | None = None) -> None:
 def route_ai_inference(request: AIRequest, settings: Settings | None = None) -> AIResponse:
     settings = settings or get_settings()
     ensure_ai_gateway_configured(settings)
+
+    # Milestone 2.6 (ADR 0012): redact high-confidence secret patterns out of
+    # the current issue's evidence and any retrieved context *before*
+    # rendering or calling either adapter, so the rendered prompt, the real
+    # provider's request payload, and the mock adapter's own narrative
+    # construction (which reads AIRequest fields directly) all see the same
+    # already-redacted content -- never the original secret-shaped text.
+    # `redaction` always carries a resolvable policy id/version/status/hash,
+    # even when nothing matched, so every AIResponse -- success or fallback
+    # -- is attributable to a specific, historically-replayable policy.
+    request, redaction = redact_ai_request(request)
     rendered = render_active_prompt(request.task, request)
 
+    def _with_redaction_provenance(response: AIResponse) -> AIResponse:
+        return replace(
+            response,
+            redaction_events=redaction.events,
+            redaction_policy_id=redaction.policy_id,
+            redaction_policy_version=redaction.policy_version,
+            redaction_policy_status=redaction.policy_status,
+            redaction_policy_hash=redaction.policy_hash,
+        )
+
     if settings.ai_provider != PROVIDER_OPENAI:
-        return mock_adapter.call(request, rendered)
+        return _with_redaction_provenance(mock_adapter.call(request, rendered))
 
     start = time.monotonic()
     try:
-        return openai_adapter.call(request, rendered, settings)
+        response = openai_adapter.call(request, rendered, settings)
+        return _with_redaction_provenance(response)
     except ProviderCallFailed as exc:
         elapsed_ms = (time.monotonic() - start) * 1000
         fallback = mock_adapter.call(request, rendered)
-        return AIResponse(
-            narrative=fallback.narrative,
-            status=STATUS_FALLBACK,
-            provider=fallback.provider,
-            model=fallback.model,
-            prompt_id=fallback.prompt_id,
-            prompt_version=fallback.prompt_version,
-            prompt_status=fallback.prompt_status,
-            prompt_template_hash=fallback.prompt_template_hash,
-            rendered_prompt_hash=fallback.rendered_prompt_hash,
-            input_tokens=fallback.input_tokens,
-            output_tokens=fallback.output_tokens,
-            estimated_cost_usd=fallback.estimated_cost_usd,
-            latency_ms=elapsed_ms,
-            fallback_reason=exc.reason,
+        return _with_redaction_provenance(
+            AIResponse(
+                narrative=fallback.narrative,
+                status=STATUS_FALLBACK,
+                provider=fallback.provider,
+                model=fallback.model,
+                prompt_id=fallback.prompt_id,
+                prompt_version=fallback.prompt_version,
+                prompt_status=fallback.prompt_status,
+                prompt_template_hash=fallback.prompt_template_hash,
+                rendered_prompt_hash=fallback.rendered_prompt_hash,
+                input_tokens=fallback.input_tokens,
+                output_tokens=fallback.output_tokens,
+                estimated_cost_usd=fallback.estimated_cost_usd,
+                latency_ms=elapsed_ms,
+                fallback_reason=exc.reason,
+            )
         )

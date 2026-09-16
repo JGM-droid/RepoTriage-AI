@@ -14,7 +14,15 @@ Runs two distinct, separately reported evaluation mechanisms (see ADR
      calibration.json`. This is the only mechanism that says anything
      about retrieval-selection quality.
 
-Default mode (no flags): runs both, compares the consolidated result
+  D. `app.evaluation.adversarial` -- a versioned fixture of prompt-
+     injection, fabricated-citation, malformed/oversized-output,
+     secret-redaction, and resource-exhaustion cases (Milestone 2.6, ADR
+     0012), run through the same real production code as A/C. Every case
+     is deterministic and blocking. These checks validate application
+     guardrails; they do not prove that every real model will resist every
+     prompt-injection technique.
+
+Default mode (no flags): runs all three (A+C, B, D), compares the consolidated result
 against the checked-in baseline (`backend/tests/evaluation/baseline.json`),
 prints a human-readable report, and exits non-zero only on a blocking
 regression. Requires an existing baseline -- it never silently compares a
@@ -40,6 +48,11 @@ import json
 import sys
 from pathlib import Path
 
+from app.evaluation.adversarial import (
+    DEFAULT_ADVERSARIAL_FIXTURE_PATH,
+    load_adversarial_fixture,
+    run_all_adversarial_cases,
+)
 from app.evaluation.cases import DEFAULT_FIXTURE_PATH, load_fixture
 from app.evaluation.report import (
     BaselineIncompatibleError,
@@ -112,11 +125,21 @@ def main(argv: list[str] | None = None) -> int:
             "section (default: tests/calibration/bge_similarity_calibration.json)."
         ),
     )
+    parser.add_argument(
+        "--adversarial-fixture",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the adversarial-guardrail fixture (Section D; default: "
+            "tests/evaluation/adversarial_cases.json)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     fixture_path = args.fixture or DEFAULT_FIXTURE_PATH
     baseline_path = args.baseline or DEFAULT_BASELINE_PATH
     calibration_path = args.calibration or DEFAULT_CALIBRATION_PATH
+    adversarial_fixture_path = args.adversarial_fixture or DEFAULT_ADVERSARIAL_FIXTURE_PATH
     command = "python -m app.evaluation" + (" --update-baseline" if args.update_baseline else "")
 
     try:
@@ -151,12 +174,32 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    try:
+        adversarial_fixture, adversarial_fixture_hash = load_adversarial_fixture(
+            adversarial_fixture_path
+        )
+    except Exception as exc:
+        print(f"ERROR: could not load adversarial-guardrail fixture: {exc}", file=sys.stderr)
+        return 1
+
+    adversarial_results = run_all_adversarial_cases(adversarial_fixture)
+    if len(adversarial_results) != len(adversarial_fixture.cases):
+        print(
+            "ERROR: adversarial-guardrail case execution incomplete: "
+            f"{len(adversarial_results)}/{len(adversarial_fixture.cases)} cases ran.",
+            file=sys.stderr,
+        )
+        return 1
+
     candidate = build_report(
         fixture,
         fixture_hash,
         results,
         retrieval_policy_fixture,
         retrieval_policy_results,
+        adversarial_fixture,
+        adversarial_fixture_hash,
+        adversarial_results,
         command=command,
     )
 
@@ -164,8 +207,10 @@ def main(argv: list[str] | None = None) -> int:
         args.output.write_text(json.dumps(report_to_dict(candidate), indent=2), encoding="utf-8")
 
     if args.update_baseline:
-        any_blocking = any(not r.passed for r in results) or any(
-            not r.passed for r in retrieval_policy_results
+        any_blocking = (
+            any(not r.passed for r in results)
+            or any(not r.passed for r in retrieval_policy_results)
+            or any(not r.passed for r in adversarial_results)
         )
         if any_blocking:
             print(

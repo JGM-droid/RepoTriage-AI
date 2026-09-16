@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.api.rate_limit import rate_limiter
 from app.database import SessionLocal
 from app.decisions.service import (
     DecisionValidationError,
@@ -39,6 +40,17 @@ def get_triage_session() -> Iterator[Session]:
 
 
 TriageSession = Annotated[Session, Depends(get_triage_session)]
+
+_start_triage_rate_limit = rate_limiter(
+    "start_triage",
+    max_requests_attr="rate_limit_triage_start_max_requests",
+    window_seconds_attr="rate_limit_triage_start_window_seconds",
+)
+_record_decision_rate_limit = rate_limiter(
+    "record_decision",
+    max_requests_attr="rate_limit_decision_max_requests",
+    window_seconds_attr="rate_limit_decision_window_seconds",
+)
 
 
 def _error_response(status_code: int, error: str, message: str) -> JSONResponse:
@@ -114,10 +126,12 @@ def _triage_result_from_analysis(session: Session, analysis: Analysis) -> Triage
     "/{issue_id}/triage",
     response_model=TriageStartedResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(_start_triage_rate_limit)],
     responses={
         status.HTTP_400_BAD_REQUEST: {"model": ErrorResponse},
         status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
         status.HTTP_409_CONFLICT: {"model": ErrorResponse},
+        status.HTTP_429_TOO_MANY_REQUESTS: {"model": ErrorResponse},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse},
     },
 )
@@ -263,10 +277,12 @@ def get_issue_triage(issue_id: UUID, session: TriageSession) -> TriageResult | J
 @router.post(
     "/{issue_id}/triage/decision",
     response_model=TriageResult,
+    dependencies=[Depends(_record_decision_rate_limit)],
     responses={
         status.HTTP_400_BAD_REQUEST: {"model": ErrorResponse},
         status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
         status.HTTP_409_CONFLICT: {"model": ErrorResponse},
+        status.HTTP_429_TOO_MANY_REQUESTS: {"model": ErrorResponse},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse},
     },
 )

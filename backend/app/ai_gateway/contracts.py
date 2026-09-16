@@ -17,6 +17,15 @@ STATUS_SUCCEEDED = "succeeded"
 STATUS_FALLBACK = "fallback"
 _VALID_STATUSES = (STATUS_SUCCEEDED, STATUS_FALLBACK)
 
+# Provider-neutral output bound (Milestone 2.6; see ADR 0012). Applies to
+# mock and real-provider narratives alike -- checked here, once, rather than
+# per-adapter, so neither adapter can silently diverge. 4000 characters is
+# generous for the requested 2-4 sentence narrative (comfortably holds the
+# deterministic mock narrative, which also lists evidence and citations) and
+# still bounds a misbehaving or adversarially-prompted provider's response
+# size before it is persisted or displayed.
+MAX_NARRATIVE_LENGTH = 4000
+
 
 @dataclass(frozen=True)
 class AIRequest:
@@ -59,7 +68,18 @@ class AIResponse:
     `rendered_prompt_hash` are the prompt-registry provenance for this
     result (see `app.ai_gateway.prompts`, ADR 0010) — set from the single
     `RenderedPrompt` both adapters render through, never constructed
-    independently by either adapter."""
+    independently by either adapter.
+
+    `redaction_policy_id`/`redaction_policy_version`/`redaction_policy_status`/
+    `redaction_policy_hash` are the redaction-policy provenance (see
+    `app.ai_gateway.redaction.RedactionPolicy`, Milestone 2.6/ADR 0012) —
+    always set by the router (`route_ai_inference`), even when
+    `redaction_events` is empty, so the absence of a redaction is still
+    attributable to a specific, historically-resolvable policy version, not
+    ambiguous with "no policy ran". Not enforced non-empty here (unlike the
+    prompt fields) so ad-hoc/test construction of an `AIResponse` stays
+    unaffected; the router is the single real call site and is covered by
+    its own tests."""
 
     narrative: str
     status: str
@@ -76,10 +96,27 @@ class AIResponse:
     latency_ms: float
     fallback_reason: str | None = None
     citations: tuple[str, ...] = field(default_factory=tuple)
+    # Names of the high-confidence secret patterns (see
+    # `app.ai_gateway.redaction`) that fired on this request's evidence or
+    # retrieved context, never the matched values themselves -- safe to
+    # persist in an audit event. Empty for the overwhelming majority of
+    # calls, where nothing matched.
+    redaction_events: tuple[str, ...] = field(default_factory=tuple)
+    redaction_policy_id: str = ""
+    redaction_policy_version: str = ""
+    redaction_policy_status: str = ""
+    redaction_policy_hash: str = ""
 
     def __post_init__(self) -> None:
         if not self.narrative or not self.narrative.strip():
             raise ValueError("AIResponse.narrative must not be empty.")
+        if len(self.narrative) > MAX_NARRATIVE_LENGTH:
+            raise ValueError(
+                f"AIResponse.narrative exceeds the {MAX_NARRATIVE_LENGTH}-character bound "
+                f"({len(self.narrative)} characters). A provider response this size must be "
+                "rejected before construction (see app.ai_gateway.openai_adapter), not "
+                "truncated here."
+            )
         if self.status not in _VALID_STATUSES:
             raise ValueError(f"Unknown AIResponse status: {self.status!r}")
         if not self.prompt_id:
@@ -105,6 +142,13 @@ class InvalidCitationError(RuntimeError):
 
 
 def validate_citations(citations: tuple[str, ...], request: AIRequest) -> None:
+    if len(set(citations)) != len(citations):
+        raise InvalidCitationError(f"duplicate citation identifier(s): {citations!r}")
+    if len(citations) > len(request.retrieved_context):
+        raise InvalidCitationError(
+            f"citation count {len(citations)} exceeds the {len(request.retrieved_context)} "
+            "record(s) actually supplied as retrieved_context"
+        )
     allowed = request.allowed_citation_identifiers()
     unknown = [citation for citation in citations if citation not in allowed]
     if unknown:

@@ -19,8 +19,10 @@ from dataclasses import replace
 
 import pytest
 
+from app.evaluation.adversarial import load_adversarial_fixture, run_all_adversarial_cases
 from app.evaluation.cases import DEFAULT_FIXTURE_PATH, load_fixture
-from app.evaluation.report import build_report, compare
+from app.evaluation.report import build_report as _real_build_report
+from app.evaluation.report import compare
 from app.evaluation.retrieval_policy import (
     DEFAULT_CALIBRATION_PATH,
     RetrievalPolicyCase,
@@ -32,6 +34,26 @@ from app.evaluation.retrieval_policy import (
 from app.evaluation.runner import run_all
 
 DEFAULT_BASELINE_PATH = DEFAULT_FIXTURE_PATH.parent / "baseline.json"
+
+_REAL_ADVERSARIAL_FIXTURE, _REAL_ADVERSARIAL_FIXTURE_HASH = load_adversarial_fixture()
+_REAL_ADVERSARIAL_RESULTS = run_all_adversarial_cases(_REAL_ADVERSARIAL_FIXTURE)
+
+
+def build_report(fixture, fixture_hash, results, rp_fixture, rp_results, *, command="test"):
+    """Wraps the real `build_report`, filling in the real adversarial
+    fixture/results so this module's stage-B-focused tests don't need to
+    repeat that boilerplate at every call site."""
+    return _real_build_report(
+        fixture,
+        fixture_hash,
+        results,
+        rp_fixture,
+        rp_results,
+        _REAL_ADVERSARIAL_FIXTURE,
+        _REAL_ADVERSARIAL_FIXTURE_HASH,
+        _REAL_ADVERSARIAL_RESULTS,
+        command=command,
+    )
 
 
 def _case(**overrides) -> RetrievalPolicyCase:

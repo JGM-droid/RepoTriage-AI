@@ -106,7 +106,12 @@ class AuditEventRecord(BaseModel):
 
 
 class TriageRequest(BaseModel):
-    ruleset_version: str = "1.0"
+    # Milestone 2.6: bounded even though the endpoint immediately rejects
+    # any value other than the exact current TRIAGE_RULESET_VERSION -- an
+    # unbounded string would otherwise be fully parsed and held in memory
+    # before that comparison ever runs. 20 characters is generous headroom
+    # for any realistic version string (the real value is "1.0").
+    ruleset_version: str = Field(default="1.0", max_length=20)
 
 
 class TriageEvidenceItem(BaseModel):
@@ -143,6 +148,14 @@ class TriageAIInference(BaseModel):
     included for technical/audit inspection via the API; the frontend's
     normal UI surfaces only `prompt_id`/`prompt_version`, not the hashes
     or the rendered prompt text itself (never returned by this API).
+
+    `redaction_events`/`redaction_policy_id`/`redaction_policy_version`/
+    `redaction_policy_status`/`redaction_policy_hash` are redaction-policy
+    provenance (Milestone 2.6, ADR 0012) — pattern *names* only, never a
+    matched secret value; always present, even when `redaction_events` is
+    empty, so "nothing was redacted" is attributable to a specific policy
+    version. Included for technical/audit inspection only; no frontend
+    display is required or expected.
     """
 
     narrative: str
@@ -159,6 +172,11 @@ class TriageAIInference(BaseModel):
     estimated_cost_usd: float
     fallback_reason: str | None = None
     citations: list[str] = Field(default_factory=list)
+    redaction_events: list[str] = Field(default_factory=list)
+    redaction_policy_id: str = ""
+    redaction_policy_version: str = ""
+    redaction_policy_status: str = ""
+    redaction_policy_hash: str = ""
 
 
 class TriageRetrievedRecord(BaseModel):
@@ -195,7 +213,12 @@ class TriageHumanReview(BaseModel):
 
 
 class TriageDecisionRequest(BaseModel):
-    decision: str
+    # Milestone 2.6: bounded even though app.decisions.service.record_decision
+    # rejects any value outside ALLOWED_DECISIONS ("approve"/"reject"/
+    # "request_revision", longest 17 characters) -- an unbounded string
+    # would otherwise be fully parsed and held in memory before that
+    # service-layer check ever runs. 32 characters is generous headroom.
+    decision: str = Field(max_length=32)
     rationale: str | None = Field(default=None, max_length=1000)
 
 

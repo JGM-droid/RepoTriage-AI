@@ -185,7 +185,7 @@ def test_mock_adapter_records_the_rendered_prompt_provenance_without_sending_it(
     result = mock_adapter.call(request, rendered)
 
     assert result.prompt_id == rendered.prompt_id == "triage_narrative"
-    assert result.prompt_version == rendered.prompt_version == "1.0.0"
+    assert result.prompt_version == rendered.prompt_version == "1.1.0"
     assert result.prompt_status == rendered.prompt_status == "released"
     assert result.prompt_template_hash == rendered.prompt_template_hash
     assert result.rendered_prompt_hash == rendered.rendered_prompt_hash
@@ -414,7 +414,7 @@ def test_router_falls_back_to_mock_within_the_same_call_on_provider_failure(
     assert result.narrative
     # Fallback still carries real prompt-registry provenance, not blanks.
     assert result.prompt_id == "triage_narrative"
-    assert result.prompt_version == "1.0.0"
+    assert result.prompt_version == "1.1.0"
     assert result.rendered_prompt_hash
 
 
@@ -529,3 +529,306 @@ def test_router_falls_back_on_an_invented_citation(monkeypatch: pytest.MonkeyPat
     assert result.status == STATUS_FALLBACK
     assert result.provider == "mock"
     assert result.fallback_reason is not None and "invalid_citation" in result.fallback_reason
+
+
+# --- output bounds (Milestone 2.6) ------------------------------------------
+
+
+def test_ai_response_rejects_a_narrative_over_the_length_bound() -> None:
+    from app.ai_gateway.contracts import MAX_NARRATIVE_LENGTH
+
+    with pytest.raises(ValueError, match="exceeds"):
+        AIResponse(
+            narrative="x" * (MAX_NARRATIVE_LENGTH + 1),
+            status=STATUS_SUCCEEDED,
+            provider="mock",
+            model="deterministic-v1",
+            prompt_id="triage_narrative",
+            prompt_version="1.1.0",
+            prompt_status="released",
+            prompt_template_hash="a" * 64,
+            rendered_prompt_hash="b" * 64,
+            input_tokens=0,
+            output_tokens=0,
+            estimated_cost_usd=0.0,
+            latency_ms=0.0,
+        )
+
+
+def test_ai_response_accepts_a_narrative_exactly_at_the_length_bound() -> None:
+    from app.ai_gateway.contracts import MAX_NARRATIVE_LENGTH
+
+    response = AIResponse(
+        narrative="x" * MAX_NARRATIVE_LENGTH,
+        status=STATUS_SUCCEEDED,
+        provider="mock",
+        model="deterministic-v1",
+        prompt_id="triage_narrative",
+        prompt_version="1.1.0",
+        prompt_status="released",
+        prompt_template_hash="a" * 64,
+        rendered_prompt_hash="b" * 64,
+        input_tokens=0,
+        output_tokens=0,
+        estimated_cost_usd=0.0,
+        latency_ms=0.0,
+    )
+    assert len(response.narrative) == MAX_NARRATIVE_LENGTH
+
+
+def test_mock_narrative_for_a_realistic_request_stays_well_under_the_bound() -> None:
+    """Sanity check for the chosen 4000-character bound against the
+    deterministic mock narrative it must never reject."""
+    from app.ai_gateway.contracts import MAX_NARRATIVE_LENGTH
+
+    request = make_request(retrieved_context=(RETRIEVED_RECORD,))
+    result = mock_adapter.call(request, make_rendered(request))
+    assert len(result.narrative) < MAX_NARRATIVE_LENGTH
+
+
+def test_openai_adapter_rejects_an_oversized_narrative_as_a_controlled_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.ai_gateway.contracts import MAX_NARRATIVE_LENGTH
+
+    monkeypatch.setattr(
+        openai_adapter.httpx,
+        "post",
+        lambda *args, **kwargs: _openai_response(content="x" * (MAX_NARRATIVE_LENGTH + 1)),
+    )
+    settings = make_settings(ai_provider="openai", openai_api_key="sk-test")
+
+    with pytest.raises(ProviderCallFailed) as exc_info:
+        openai_adapter.call(make_request(), make_rendered(), settings)
+    assert exc_info.value.reason == "openai_narrative_too_long"
+
+
+def test_router_falls_back_on_an_oversized_narrative(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.ai_gateway.contracts import MAX_NARRATIVE_LENGTH
+
+    monkeypatch.setattr(
+        openai_adapter.httpx,
+        "post",
+        lambda *args, **kwargs: _openai_response(content="x" * (MAX_NARRATIVE_LENGTH + 1)),
+    )
+    settings = make_settings(ai_provider="openai", openai_api_key="sk-test")
+
+    result = router.route_ai_inference(make_request(), settings)
+
+    assert result.status == STATUS_FALLBACK
+    assert result.fallback_reason == "openai_narrative_too_long"
+    assert len(result.narrative) < MAX_NARRATIVE_LENGTH
+
+
+def test_validate_citations_rejects_a_duplicate_identifier() -> None:
+    from app.ai_gateway.contracts import InvalidCitationError
+
+    request = make_request(retrieved_context=(RETRIEVED_RECORD,))
+    with pytest.raises(InvalidCitationError, match="duplicate"):
+        validate_citations(("issue:5756", "issue:5756"), request)
+
+
+def test_validate_citations_rejects_more_citations_than_retrieved_records() -> None:
+    from app.ai_gateway.contracts import InvalidCitationError
+
+    other_record = RetrievedRecord(
+        identifier="issue:5757",
+        source_type="issue",
+        external_number=5757,
+        title="Another issue",
+        excerpt="Another excerpt.",
+        source_url="https://github.com/pallets/flask/issues/5757",
+        similarity_score=0.8,
+        relevance_explanation="test",
+        embedding_model="fake-hash-embedder",
+        embedding_version="1",
+    )
+    # Only one record supplied, but the (fabricated) response cites two
+    # distinct, individually-valid-looking identifiers.
+    request = make_request(retrieved_context=(RETRIEVED_RECORD,))
+    with pytest.raises(InvalidCitationError, match="exceeds"):
+        validate_citations(("issue:5756", other_record.identifier), request)
+
+
+# --- sensitive-data boundary: provider-bound redaction (Milestone 2.6) ------
+
+
+_OPENAI_STYLE_TEST_SECRET = "sk-" + "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
+_GITHUB_PAT_TEST_SECRET = "ghp_" + "b" * 36
+
+
+def test_router_redacts_a_high_confidence_secret_from_current_issue_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    injected_evidence = (
+        EvidenceItem(
+            field="body",
+            excerpt=f"Here is my key: {_OPENAI_STYLE_TEST_SECRET}",
+            source_url="https://example.test/1",
+        ),
+    )
+    request = AIRequest(
+        task="triage_narrative",
+        classification=CLASSIFICATION,
+        evidence=injected_evidence,
+        assessment=ASSESSMENT,
+        proposed_action=PROPOSED_ACTION,
+    )
+    settings = make_settings(ai_provider="mock")
+
+    result = router.route_ai_inference(request, settings)
+
+    assert _OPENAI_STYLE_TEST_SECRET not in result.narrative
+    assert "openai_api_key" in result.redaction_events
+    assert "[REDACTED:openai_api_key]" in result.narrative
+    assert result.redaction_policy_id == "provider_input_redaction"
+    assert result.redaction_policy_version == "1.0.0"
+    assert result.redaction_policy_status == "released"
+    assert len(result.redaction_policy_hash) == 64
+
+
+def test_router_redacts_a_high_confidence_secret_from_retrieved_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    injected_record = RetrievedRecord(
+        identifier="issue:9999",
+        source_type="issue",
+        external_number=9999,
+        title="Leaked token report",
+        excerpt=f"Someone committed {_GITHUB_PAT_TEST_SECRET} by mistake.",
+        source_url="https://github.com/pallets/flask/issues/9999",
+        similarity_score=0.9,
+        relevance_explanation="test",
+        embedding_model="fake-hash-embedder",
+        embedding_version="1",
+    )
+    request = make_request(retrieved_context=(injected_record,))
+    settings = make_settings(ai_provider="mock")
+
+    result = router.route_ai_inference(request, settings)
+
+    assert _GITHUB_PAT_TEST_SECRET not in result.narrative
+    assert "github_personal_access_token" in result.redaction_events
+
+
+def test_redaction_removes_the_secret_from_the_rendered_prompt_sent_to_the_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The redacted text must never reach the outgoing provider payload
+    either -- not just the final narrative."""
+    captured: dict[str, object] = {}
+
+    def fake_post(url, *, json, headers, timeout):
+        captured["content"] = json["messages"][0]["content"]
+        return _openai_response()
+
+    monkeypatch.setattr(openai_adapter.httpx, "post", fake_post)
+    injected_evidence = (
+        EvidenceItem(
+            field="body",
+            excerpt=f"Here is my key: {_OPENAI_STYLE_TEST_SECRET}",
+            source_url="https://example.test/1",
+        ),
+    )
+    request = AIRequest(
+        task="triage_narrative",
+        classification=CLASSIFICATION,
+        evidence=injected_evidence,
+        assessment=ASSESSMENT,
+        proposed_action=PROPOSED_ACTION,
+    )
+    settings = make_settings(ai_provider="openai", openai_api_key="sk-test")
+
+    router.route_ai_inference(request, settings)
+
+    assert _OPENAI_STYLE_TEST_SECRET not in captured["content"]
+    assert "[REDACTED:openai_api_key]" in captured["content"]
+
+
+def test_redaction_events_are_empty_when_nothing_matches() -> None:
+    result = router.route_ai_inference(make_request(), make_settings(ai_provider="mock"))
+    assert result.redaction_events == ()
+    # Absence of a redaction event is still attributable to a specific
+    # policy version -- never blank/ambiguous with "no policy ran".
+    assert result.redaction_policy_id == "provider_input_redaction"
+    assert result.redaction_policy_version == "1.0.0"
+    assert result.redaction_policy_status == "released"
+    assert len(result.redaction_policy_hash) == 64
+
+
+def test_fallback_preserves_identical_redaction_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fallback path reconstructs `AIResponse` manually (see
+    router.route_ai_inference) -- it must carry exactly the same redaction
+    provenance as a successful call, not a blanked-out or differently
+    shaped one."""
+
+    def raise_failed(*args, **kwargs):
+        raise ProviderCallFailed("openai_timeout")
+
+    monkeypatch.setattr(router.openai_adapter, "call", raise_failed)
+    injected_evidence = (
+        EvidenceItem(
+            field="body",
+            excerpt=f"Here is my key: {_OPENAI_STYLE_TEST_SECRET}",
+            source_url="https://example.test/1",
+        ),
+    )
+    request = AIRequest(
+        task="triage_narrative",
+        classification=CLASSIFICATION,
+        evidence=injected_evidence,
+        assessment=ASSESSMENT,
+        proposed_action=PROPOSED_ACTION,
+    )
+    settings = make_settings(ai_provider="openai", openai_api_key="sk-test")
+
+    result = router.route_ai_inference(request, settings)
+
+    assert result.status == STATUS_FALLBACK
+    assert "openai_api_key" in result.redaction_events
+    assert result.redaction_policy_id == "provider_input_redaction"
+    assert result.redaction_policy_version == "1.0.0"
+    assert result.redaction_policy_status == "released"
+    assert len(result.redaction_policy_hash) == 64
+
+
+def test_redaction_does_not_touch_ordinary_code_or_markdown() -> None:
+    """The narrow pattern set must not destroy legitimate issue content --
+    only the three specific high-confidence credential formats."""
+    from app.ai_gateway.redaction import redact_secrets
+
+    ordinary_code = (
+        "```python\n"
+        "API_KEY = os.environ['MY_KEY']\n"
+        "def handler(event, context):\n"
+        "    return {'statusCode': 200}\n"
+        "```\n"
+        "See also [our docs](https://example.test/docs) and `pip install foo`."
+    )
+    redacted, events = redact_secrets(ordinary_code)
+    assert redacted == ordinary_code
+    assert events == ()
+
+
+def test_ai_request_has_no_field_that_could_carry_application_secrets() -> None:
+    """Structural guarantee, not a leak test with a real key: `AIRequest`
+    has no field of any kind for API keys, credentials, or settings --
+    application-controlled secrets are read only inside
+    `openai_adapter.call` from `Settings`, for exactly one request, and
+    never assigned into any `AIRequest`/`EvidenceItem`/`RetrievedRecord`
+    field. There is therefore nothing for `app.ai_gateway.redaction` to
+    find for the application's own key, by construction -- this test does
+    not (and must not) insert a real credential to demonstrate that."""
+    import dataclasses
+
+    field_names = {f.name for f in dataclasses.fields(AIRequest)}
+    assert field_names == {
+        "task",
+        "classification",
+        "evidence",
+        "assessment",
+        "proposed_action",
+        "retrieved_context",
+    }
