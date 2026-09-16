@@ -58,6 +58,16 @@ _SEED_CHAIN_STATEMENTS = (
 
 def _alembic_config(database_url: str) -> Config:
     config = Config(str(ALEMBIC_INI_PATH))
+    # alembic.ini's `script_location = alembic` is intentionally relative
+    # so the CLI works from `backend/` (the documented working directory
+    # for every manual/CI `alembic` invocation). Alembic resolves a
+    # relative script_location against the process's current working
+    # directory, not the ini file's own directory -- so invoking the
+    # Python API here, from a pytest process that may be launched from
+    # the repository root (as CI's `pytest backend/tests` does), needs an
+    # absolute override to find the same scripts folder regardless of
+    # where pytest was started from.
+    config.set_main_option("script_location", str(ALEMBIC_INI_PATH.parent / "alembic"))
     config.set_main_option("sqlalchemy.url", database_url)
     return config
 
