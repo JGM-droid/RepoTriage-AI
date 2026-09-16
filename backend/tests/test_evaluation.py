@@ -128,11 +128,32 @@ def test_an_empty_fixture_is_rejected() -> None:
         EvaluationFixture(schema_version="1.0.0", fixture_version="1.0.0", description="", cases=())
 
 
-def test_fixture_content_hash_changes_with_any_byte_change() -> None:
+def test_fixture_content_hash_changes_with_a_real_content_change() -> None:
     first = fixture_content_hash(b'{"a": 1}')
     second = fixture_content_hash(b'{"a": 2}')
     assert first != second
     assert fixture_content_hash(b'{"a": 1}') == first  # deterministic
+
+
+def test_fixture_content_hash_is_invariant_to_formatting_and_line_endings() -> None:
+    """CI investigation (Milestone 2.7 correction): hashing raw file bytes
+    is platform-dependent -- a Windows-authored fixture file's CRLF line
+    endings hashed differently from the same, semantically-identical git
+    blob Linux CI checks out as LF, causing a spurious
+    BaselineIncompatibleError. The hash must depend only on the fixture's
+    actual content, never on line endings, indentation, key order, or
+    trailing whitespace."""
+    compact = b'{"a":1,"b":2}'
+    pretty_lf = b'{\n  "a": 1,\n  "b": 2\n}\n'
+    pretty_crlf = b'{\r\n  "a": 1,\r\n  "b": 2\r\n}\r\n'
+    reordered_keys = b'{"b":2,"a":1}'
+
+    assert (
+        fixture_content_hash(compact)
+        == fixture_content_hash(pretty_lf)
+        == fixture_content_hash(pretty_crlf)
+        == fixture_content_hash(reordered_keys)
+    )
 
 
 # --- deterministic execution --------------------------------------------------

@@ -9,10 +9,10 @@ execution.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 
+from app.evaluation.canonical import canonical_json_hash
 from app.evaluation.contracts import EvaluationCase, EvaluationFixture, SuppliedRetrievedRecord
 
 DEFAULT_FIXTURE_PATH = (
@@ -21,11 +21,16 @@ DEFAULT_FIXTURE_PATH = (
 
 
 def fixture_content_hash(raw_bytes: bytes) -> str:
-    """SHA-256 of the fixture file's raw bytes. Any change -- even
-    whitespace -- changes this, which is deliberate: the baseline
-    comparison treats a fixture change as something requiring an
-    intentional, reviewed baseline update, never a silent pass-through."""
-    return hashlib.sha256(raw_bytes).hexdigest()
+    """SHA-256 of the fixture's canonical JSON form (see
+    `app.evaluation.canonical`) -- platform-independent: line endings,
+    indentation, key order, and trailing whitespace never change this; any
+    real change to the fixture's content always does. Deliberate: the
+    baseline comparison must treat a genuine fixture change as something
+    requiring an intentional, reviewed baseline update, never a silent
+    pass-through -- but must never itself become a platform-dependent
+    false positive (see `app.evaluation.canonical`'s module docstring for
+    the CI failure this corrected)."""
+    return canonical_json_hash(json.loads(raw_bytes))
 
 
 def _parse_retrieved_record(data: dict) -> SuppliedRetrievedRecord:

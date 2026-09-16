@@ -2,7 +2,7 @@
   "report_schema_version": "2.0.0",
   "fixture_schema_version": "1.0.0",
   "fixture_version": "1.0.0",
-  "fixture_hash": "69236c8c69cb86bc33e7337b0d95edf34398c76804392f15657f3edd097d995f",
+  "fixture_hash": "58b2cbeb65c210cc4b582c3df5f152c2fe20a4c4287dbc0af77f0596db97a45e",
   "calibration_schema_version": "1.0.0",
   "provider": "mock",
   "model": "deterministic-v1",
@@ -538,7 +538,7 @@
     "retrieval_policy_expected_accept_rate": 1.0,
     "retrieval_policy_forbidden_rejection_rate": 1.0
   },
-  "adversarial_fixture_hash": "6bf3873e2f4616f378ed32c698d94ff54689b48a8b52b81b93eac7dcaf0d4c8d",
+  "adversarial_fixture_hash": "1aa319ae0993aab96cb263dd17f5b7704a9f9c7c199a0bc543c7dafa1897fadd",
   "adversarial_results": [
     {
       "case_id": "adv_injection_in_issue_body",

@@ -44,6 +44,7 @@ import httpx
 from app.ai_gateway.contracts import STATUS_FALLBACK, STATUS_SUCCEEDED, AIRequest
 from app.ai_gateway.router import route_ai_inference
 from app.config import Settings
+from app.evaluation.canonical import canonical_json_hash
 from app.evaluation.contracts import SuppliedRetrievedRecord
 from app.retrieval.contracts import RetrievedRecord
 from app.triage.rules import assess, classify, human_review, propose, retrieve_fixture_evidence
@@ -245,10 +246,11 @@ def _parse_case(data: dict) -> AdversarialCase:
 
 
 def load_adversarial_fixture(path: Path | None = None) -> tuple[AdversarialFixture, str]:
-    """Returns (parsed fixture, sha256 of the raw file bytes) -- mirrors
-    `app.evaluation.cases.load_fixture`'s hash-pinning discipline."""
-    import hashlib
-
+    """Returns (parsed fixture, canonical-JSON sha256 of its content) --
+    mirrors `app.evaluation.cases.load_fixture`'s hash-pinning discipline,
+    using the same platform-independent `app.evaluation.canonical` hash
+    (see its module docstring for why raw-file-bytes hashing is unsafe
+    here: it broke CI on this exact fixture)."""
     fixture_path = path or DEFAULT_ADVERSARIAL_FIXTURE_PATH
     raw_bytes = fixture_path.read_bytes()
     data = json.loads(raw_bytes)
@@ -258,7 +260,7 @@ def load_adversarial_fixture(path: Path | None = None) -> tuple[AdversarialFixtu
         description=data.get("description", ""),
         cases=tuple(_parse_case(c) for c in data["cases"]),
     )
-    return fixture, hashlib.sha256(raw_bytes).hexdigest()
+    return fixture, canonical_json_hash(data)
 
 
 def _run_ai_stage(case: AdversarialCase, request: AIRequest):
