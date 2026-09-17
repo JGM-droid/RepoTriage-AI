@@ -278,9 +278,18 @@ class AuditEvent(UUIDTimestampMixin, Base):
     __tablename__ = "audit_events"
 
     repository_id: Mapped[UUID] = mapped_column(
-        ForeignKey("repositories.id"), nullable=False, index=True
+        ForeignKey(
+            "repositories.id",
+            name="fk_audit_events_repository_id_repositories",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+        index=True,
     )
-    issue_id: Mapped[UUID | None] = mapped_column(ForeignKey("issues.id"), index=True)
+    issue_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("issues.id", name="fk_audit_events_issue_id_issues", ondelete="RESTRICT"),
+        index=True,
+    )
     actor_id: Mapped[UUID | None] = mapped_column(index=True)
     event_type: Mapped[str] = mapped_column(String(128), nullable=False)
     metadata_: Mapped[dict[str, object] | None] = mapped_column("metadata", JSONB)

@@ -27,6 +27,7 @@ from sqlalchemy import create_engine, text
 from alembic import command
 from alembic.config import Config
 from app.config import get_settings
+from tests.db_maintenance import truncate_for_test
 
 ALEMBIC_INI_PATH = Path(__file__).resolve().parents[1] / "alembic.ini"
 PRE_ORGANIZATIONS_REVISION = "20260916_0004"
@@ -141,6 +142,10 @@ def migration_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("DATABASE_URL", database_url)
     get_settings.cache_clear()
     config = _alembic_config(database_url)
+    # Later append-only migrations may be active when the full suite
+    # reaches this historical-migration test. Privileged cleanup is safe
+    # only because DATABASE_URL names the disposable test database.
+    _truncate_everything(database_url)
     # `command.upgrade` only ever walks forward -- given a target that is
     # already behind the database's current revision (true here whenever
     # a later migration, e.g. 20260918_0006, already exists above this
@@ -160,12 +165,32 @@ def _truncate_everything(database_url: str) -> None:
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:
         with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "TRUNCATE audit_events, human_decisions, recommendations, analyses, "
-                    "stage_attempts, issues, repositories CASCADE"
-                )
+            truncate_for_test(
+                connection,
+                "TRUNCATE audit_events, human_decisions, recommendations, analyses, "
+                "stage_attempts, issues, repositories CASCADE",
             )
+            if connection.scalar(text("SELECT to_regclass('organizations') IS NOT NULL")):
+                if connection.scalar(text("SELECT to_regclass('actors') IS NOT NULL")):
+                    connection.execute(
+                        text(
+                            "DELETE FROM actors WHERE organization_id NOT IN "
+                            "(:default_org, :isolation_org)"
+                        ),
+                        {
+                            "default_org": DEFAULT_ORGANIZATION_ID,
+                            "isolation_org": ISOLATION_DEMO_ORGANIZATION_ID,
+                        },
+                    )
+                connection.execute(
+                    text(
+                        "DELETE FROM organizations WHERE id NOT IN (:default_org, :isolation_org)"
+                    ),
+                    {
+                        "default_org": DEFAULT_ORGANIZATION_ID,
+                        "isolation_org": ISOLATION_DEMO_ORGANIZATION_ID,
+                    },
+                )
     finally:
         engine.dispose()
 

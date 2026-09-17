@@ -475,7 +475,7 @@ At the end of every work session, update the Current Project State below. Do not
 ## 11. Current Project State
 
 **Current release:** Release 3 — Enterprise hardening
-**Current milestone:** Milestone 3.2 — Append-only auditability (next; implementation not started)
+**Current milestone:** Milestone 3.2 — Append-only auditability (implemented; awaiting Jesse's ownership review)
 **Status:** Release 1 — Product foundation is complete. Milestones 2.1–2.5 are complete (Jesse
 approved all five): a provider-neutral AI gateway with deterministic fallback (ADR 0008);
 repository-grounded pgvector retrieval with a calibrated two-band confidence model, disclosed
@@ -678,8 +678,36 @@ before persistence; and rate limiting remains IP-keyed and fail-open during Redi
 
 **Last approved decision:** Milestone 3.1 — Multi-tenancy and roles (ADR 0013 and ADR 0014) and
 Critical Gate G4 are complete after Jesse's approved live ownership walkthrough.
-**Next action:** Begin Milestone 3.2 — Append-only auditability: capture imports, analyses,
-workflow transitions, routing decisions, approvals, rejections, edits, and administrative changes.
+**Milestone 3.2 implementation state:** Migration `20260919_0007` and [ADR 0015](adr/0015-database-enforced-append-only-audit-events.md)
+add database-enforced append-only protection for `audit_events`: ordinary `UPDATE`, `DELETE`,
+bulk mutation, and `TRUNCATE` fail; named restrictive foreign keys preserve history across parent
+deletion; inserts and tenant-scoped reads remain available. Imports now append one idempotent
+`issues_imported` event only when new issues are inserted. Workflow transitions, retrieval,
+routing/prompt/redaction provenance, and explicit human decisions retain their existing evidence.
+The application has no edit or administrative mutation capability yet, so those future actions
+remain an explicit event-coverage gap. Recovery verification passed 92 focused tests and the full
+502-test backend suite against fresh disposable PostgreSQL/Redis. A controlled disposable-only
+trigger removal made the direct-SQL mutation test fail as predicted; restoring both triggers made
+it pass. Historical migration fixtures are isolated from custom-tenant rows left by earlier
+focused tests. The pre-separation integrity review found exactly 34 changed/untracked paths (28
+tracked modifications and 6 untracked files); the independent workflow-stage ordering correction
+is preserved in its own commit and is not Milestone 3.2 work. Ruff checked 115 Python files and
+reported `115 files already formatted`; it did not rewrite 115 files. Diff, Compose, changed-line
+secret, and generated-artifact checks pass.
+
+The live demo remains at migration `20260918_0006`. Its counts are higher than the earlier
+22-analysis baseline because two pre-auditability demo workflows created two analyses, two
+recommendations, 22 unique stage attempts, and 10 audit events, followed by one browser-recorded
+decision and its audit event. Retained logs cannot prove the exact human operator for either
+workflow initiation. Their rows predate the disposable append-only verification, so that
+verification did not create them. The local Compose runtime credential currently owns
+`audit_events` and is a PostgreSQL superuser: triggers protect ordinary application DML, not an
+owner/superuser with DDL access. A deployment-ready design must separate a migration-owner role
+from a restricted application-runtime role before claiming protection against a compromised
+runtime credential. This protection is neither universal nor cryptographic. The implementation
+is not applied live and is awaiting Jesse's ownership review; it is not complete.
+**Next action:** Jesse ownership review for Milestone 3.2, followed by separately authorized live
+migration planning if approved.
 **Blockers:** None identified.
 
 **Ownership follow-up:** Review remaining technical ownership topics when their corresponding components are implemented.

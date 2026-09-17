@@ -3,7 +3,7 @@ import os
 from collections.abc import Iterator
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 import app.triage.service as triage_service
@@ -22,6 +22,7 @@ from app.triage.service import (
     start_triage,
     status_history,
 )
+from tests.db_maintenance import truncate_for_test
 
 TRUNCATE_CORE_TABLES = (
     "TRUNCATE audit_events, human_decisions, recommendations, "
@@ -38,7 +39,7 @@ def database_session() -> Iterator[Session]:
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:
         with engine.begin() as connection:
-            connection.execute(text(TRUNCATE_CORE_TABLES))
+            truncate_for_test(connection, TRUNCATE_CORE_TABLES)
         with Session(engine) as session:
             yield session
     finally:

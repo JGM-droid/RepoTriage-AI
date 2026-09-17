@@ -15,7 +15,8 @@ from sqlalchemy.orm import Session
 
 from app.importer.schemas import ImportValidationError
 from app.importer.service import ImporterConfig, import_records
-from app.models.core import DEFAULT_ORGANIZATION_ID, Issue, Repository
+from app.models.core import DEFAULT_ORGANIZATION_ID, AuditEvent, Issue, Repository
+from tests.db_maintenance import truncate_for_test
 
 TRUNCATE_CORE_TABLES = (
     "TRUNCATE audit_events, human_decisions, recommendations, "
@@ -47,7 +48,7 @@ def database_session() -> Session:
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:
         with engine.begin() as connection:
-            connection.execute(text(TRUNCATE_CORE_TABLES))
+            truncate_for_test(connection, TRUNCATE_CORE_TABLES)
         with Session(engine) as session:
             yield session
     finally:
@@ -70,6 +71,12 @@ def test_import_records_creates_repository_and_issues(database_session: Session)
     assert summary.skipped_existing == 0
     assert database_session.execute(select(Repository)).scalar_one()
     assert len(database_session.execute(select(Issue)).scalars().all()) == 3
+    audit_event = database_session.execute(
+        select(AuditEvent).where(AuditEvent.event_type == "issues_imported")
+    ).scalar_one()
+    assert audit_event.repository_id == summary.repository_id
+    assert audit_event.issue_id is None
+    assert audit_event.metadata_ == {"considered": 3, "inserted": 3, "skipped_existing": 0}
 
 
 def test_import_records_is_idempotent_on_repeat_import(database_session: Session) -> None:
@@ -96,6 +103,14 @@ def test_import_records_is_idempotent_on_repeat_import(database_session: Session
     issue_count = database_session.execute(select(Issue)).scalars().all()
     assert len(repository_count) == 1
     assert len(issue_count) == 2
+    assert (
+        database_session.scalar(
+            select(text("count(*)"))
+            .select_from(AuditEvent)
+            .where(AuditEvent.event_type == "issues_imported")
+        )
+        == 1
+    )
 
 
 def test_import_records_enforces_configured_issue_limit(database_session: Session) -> None:

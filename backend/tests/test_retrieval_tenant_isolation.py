@@ -25,7 +25,7 @@ import os
 from collections.abc import Iterator
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.models.core import (
@@ -44,6 +44,7 @@ from app.retrieval.service import retrieve_related_evidence
 from app.retrieval.stage import run_retrieve_related_evidence_stage
 from app.triage.rules import Classification
 from app.workflow.tasks import process_workflow_run
+from tests.db_maintenance import truncate_for_test
 
 TRUNCATE_TABLES = (
     "audit_events, human_decisions, recommendations, stage_attempts, analyses, "
@@ -74,7 +75,7 @@ def database_session() -> Iterator[Session]:
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:
         with engine.begin() as connection:
-            connection.execute(text(f"TRUNCATE {TRUNCATE_TABLES}"))
+            truncate_for_test(connection, f"TRUNCATE {TRUNCATE_TABLES}")
         with Session(engine) as session:
             yield session
     finally:

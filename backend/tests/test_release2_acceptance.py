@@ -33,7 +33,7 @@ from collections.abc import Iterator
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.ai_gateway import openai_adapter
@@ -58,6 +58,7 @@ from app.retrieval.contracts import RetrievedRecord
 from app.retrieval.embedding import FakeEmbeddingAdapter, embed_query
 from app.retrieval.stage import build_query_text
 from app.triage.rules import Assessment, Classification, EvidenceItem, ProposedAction, classify
+from tests.db_maintenance import truncate_for_test
 
 TRUNCATE_CORE_TABLES = (
     "TRUNCATE audit_events, human_decisions, recommendations, "
@@ -80,7 +81,7 @@ def database_session() -> Iterator[Session]:
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:
         with engine.begin() as connection:
-            connection.execute(text(TRUNCATE_CORE_TABLES))
+            truncate_for_test(connection, TRUNCATE_CORE_TABLES)
         with Session(engine) as session:
             yield session
     finally:

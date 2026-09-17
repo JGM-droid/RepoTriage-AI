@@ -29,7 +29,7 @@ from app.importer.schemas import (
     RawIssueRecord,
     parse_raw_record,
 )
-from app.models.core import Issue, Repository
+from app.models.core import AuditEvent, Issue, Repository
 
 FIXTURE_FORMAT_VERSION = "1.0"
 
@@ -145,6 +145,18 @@ def import_records(
             result = session.execute(stmt)
             if result.first() is not None:
                 inserted += 1
+        if inserted:
+            session.add(
+                AuditEvent(
+                    repository_id=repository.id,
+                    event_type="issues_imported",
+                    metadata_={
+                        "considered": len(records),
+                        "inserted": inserted,
+                        "skipped_existing": len(records) - inserted,
+                    },
+                )
+            )
         session.commit()
     except Exception:
         session.rollback()

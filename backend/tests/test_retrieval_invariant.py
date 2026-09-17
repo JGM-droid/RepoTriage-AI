@@ -34,7 +34,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 import app.retrieval.stage as retrieval_stage
@@ -50,6 +50,7 @@ from app.models.core import (
 )
 from app.retrieval.service import RetrievalTenantMismatchError, _assert_chunks_belong_to_repository
 from app.workflow.tasks import process_workflow_run
+from tests.db_maintenance import truncate_for_test
 
 TRUNCATE_CORE_TABLES = (
     "TRUNCATE audit_events, human_decisions, recommendations, stage_attempts, "
@@ -66,7 +67,7 @@ def database_session() -> Iterator[Session]:
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:
         with engine.begin() as connection:
-            connection.execute(text(TRUNCATE_CORE_TABLES))
+            truncate_for_test(connection, TRUNCATE_CORE_TABLES)
         with Session(engine) as session:
             yield session
     finally:

@@ -53,6 +53,7 @@ from app.workflow.tasks import (
     execute_triage_workflow,
     process_workflow_run,
 )
+from tests.db_maintenance import truncate_for_test
 
 TRUNCATE_CORE_TABLES = (
     "TRUNCATE audit_events, human_decisions, recommendations, stage_attempts, "
@@ -79,7 +80,7 @@ def database_session() -> Iterator[Session]:
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:
         with engine.begin() as connection:
-            connection.execute(text(TRUNCATE_CORE_TABLES))
+            truncate_for_test(connection, TRUNCATE_CORE_TABLES)
             # This file's `insert_actor` helper creates custom actors
             # beyond the five deterministic built-ins; clean up both
             # before and after so no test in this file (or any other
@@ -96,7 +97,7 @@ def database_session() -> Iterator[Session]:
             # `with` block exits. Using `session` itself avoids the
             # cross-connection lock wait entirely.
             session.rollback()
-            session.execute(text(TRUNCATE_CORE_TABLES))
+            truncate_for_test(session.connection(), TRUNCATE_CORE_TABLES)
             session.execute(_DELETE_CUSTOM_ACTORS)
             session.commit()
     finally:

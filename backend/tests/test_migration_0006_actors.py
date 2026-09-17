@@ -28,6 +28,7 @@ from sqlalchemy import create_engine, text
 from alembic import command
 from alembic.config import Config
 from app.config import get_settings
+from tests.db_maintenance import truncate_for_test
 
 ALEMBIC_INI_PATH = Path(__file__).resolve().parents[1] / "alembic.ini"
 PRE_ACTORS_REVISION = "20260917_0005"
@@ -48,6 +49,8 @@ _EXPECTED_ACTORS = {
     ISOLATION_ORG_VIEWER_ACTOR_ID: (ISOLATION_DEMO_ORGANIZATION_ID, "viewer"),
     ISOLATION_ORG_ADMINISTRATOR_ACTOR_ID: (ISOLATION_DEMO_ORGANIZATION_ID, "administrator"),
 }
+
+_THIS_MIGRATION = "20260918_0006"
 
 
 def _alembic_config(database_url: str) -> Config:
@@ -104,7 +107,8 @@ def migration_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("DATABASE_URL", database_url)
     get_settings.cache_clear()
     config = _alembic_config(database_url)
-    command.upgrade(config, "head")
+    _truncate_everything(database_url)
+    command.downgrade(config, _THIS_MIGRATION)
     try:
         yield database_url, config
     finally:
@@ -116,12 +120,32 @@ def _truncate_everything(database_url: str) -> None:
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:
         with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "TRUNCATE audit_events, human_decisions, recommendations, analyses, "
-                    "stage_attempts, issues, repositories CASCADE"
-                )
+            truncate_for_test(
+                connection,
+                "TRUNCATE audit_events, human_decisions, recommendations, analyses, "
+                "stage_attempts, issues, repositories CASCADE",
             )
+            if connection.scalar(text("SELECT to_regclass('organizations') IS NOT NULL")):
+                if connection.scalar(text("SELECT to_regclass('actors') IS NOT NULL")):
+                    connection.execute(
+                        text(
+                            "DELETE FROM actors WHERE organization_id NOT IN "
+                            "(:default_org, :isolation_org)"
+                        ),
+                        {
+                            "default_org": DEFAULT_ORGANIZATION_ID,
+                            "isolation_org": ISOLATION_DEMO_ORGANIZATION_ID,
+                        },
+                    )
+                connection.execute(
+                    text(
+                        "DELETE FROM organizations WHERE id NOT IN (:default_org, :isolation_org)"
+                    ),
+                    {
+                        "default_org": DEFAULT_ORGANIZATION_ID,
+                        "isolation_org": ISOLATION_DEMO_ORGANIZATION_ID,
+                    },
+                )
     finally:
         engine.dispose()
 
@@ -140,7 +164,7 @@ def test_clean_upgrade_from_an_empty_database_reaches_0006(
     monkeypatch.setenv("DATABASE_URL", empty_database_url)
     get_settings.cache_clear()
     try:
-        command.upgrade(empty_db_config, "head")
+        command.upgrade(empty_db_config, _THIS_MIGRATION)
     finally:
         monkeypatch.setenv("DATABASE_URL", base_database_url)
         get_settings.cache_clear()
@@ -203,7 +227,7 @@ def test_0005_to_0006_preserves_existing_organization_and_repository_data(
             ).scalar()
             assert has_default_before is not None
 
-        command.upgrade(config, "head")
+        command.upgrade(config, _THIS_MIGRATION)
 
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
@@ -279,7 +303,7 @@ def test_downgrade_then_upgrade_restores_deterministic_actors(migration_env) -> 
             ).scalar()
             assert has_default is not None  # restored
 
-        command.upgrade(config, "head")
+        command.upgrade(config, _THIS_MIGRATION)
 
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
@@ -350,7 +374,7 @@ def test_normal_bootstrap_does_not_duplicate_actors(migration_env) -> None:
     never create duplicate actor rows."""
     database_url, config = migration_env
 
-    command.upgrade(config, "head")  # already at head; must be a no-op
+    command.upgrade(config, _THIS_MIGRATION)  # already there; must be a no-op
 
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:
