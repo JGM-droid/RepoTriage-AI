@@ -358,7 +358,11 @@ evidence).
 
 Capture imports, analyses, workflow transitions, routing decisions, approvals, rejections, edits, and administrative changes.
 
+**Status:** Complete — approved by Jesse within the documented local-demo trust boundary.
+
 ### Milestone 3.3 — End-to-end observability
+
+**Status:** Next — implementation not started.
 
 - Correlation ID from frontend through API, workflow, retrieval, model call, cost, and audit event
 - OpenTelemetry spans and errors
@@ -475,7 +479,7 @@ At the end of every work session, update the Current Project State below. Do not
 ## 11. Current Project State
 
 **Current release:** Release 3 — Enterprise hardening
-**Current milestone:** Milestone 3.2 — Append-only auditability (implemented; awaiting Jesse's ownership review)
+**Current milestone:** Milestone 3.3 — End-to-end observability (next; implementation not started)
 **Status:** Release 1 — Product foundation is complete. Milestones 2.1–2.5 are complete (Jesse
 approved all five): a provider-neutral AI gateway with deterministic fallback (ADR 0008);
 repository-grounded pgvector retrieval with a calibrated two-band confidence model, disclosed
@@ -588,8 +592,9 @@ secret patterns; the original imported evidence snapshot remains unredacted by d
 deliberate scope boundary, not an oversight); the retrieval-policy evaluation remains a small,
 frozen sample and retains the accepted #6139 polysemy limitation; rate limiting is IP-keyed and
 fails open if Redis is unavailable. Release 3 remains in progress: Milestone 3.1 multi-tenancy,
-roles, and backend-enforced permissions is complete; append-only auditability, observability,
-security hardening, and containerized cloud delivery remain future Release 3 milestones.
+roles, and backend-enforced permissions and Milestone 3.2 append-only auditability are complete;
+observability, security hardening, and containerized cloud delivery remain future Release 3
+milestones.
 
 Milestone 3.1 — Multi-tenancy and roles, Slice 1 — organization/tenant data-model foundation, is
 complete and Jesse-approved. This slice is a **data-model foundation only**; it does not implement
@@ -676,9 +681,10 @@ The verified pre-0006 backup is retained outside the repository. Residual bounda
 not transactionally enclosed, so authorization is checked immediately before inference and again
 before persistence; and rate limiting remains IP-keyed and fail-open during Redis outages.
 
-**Last approved decision:** Milestone 3.1 — Multi-tenancy and roles (ADR 0013 and ADR 0014) and
-Critical Gate G4 are complete after Jesse's approved live ownership walkthrough.
-**Milestone 3.2 implementation state:** Migration `20260919_0007` and [ADR 0015](adr/0015-database-enforced-append-only-audit-events.md)
+**Last approved decision:** Milestone 3.2 — Append-only auditability (ADR 0015) is complete after
+Jesse approved the implementation, live activation evidence, and documented local-demo trust
+boundary.
+**Milestone 3.2 completion state:** Migration `20260919_0007` and [ADR 0015](adr/0015-database-enforced-append-only-audit-events.md)
 add database-enforced append-only protection for `audit_events`: ordinary `UPDATE`, `DELETE`,
 bulk mutation, and `TRUNCATE` fail; named restrictive foreign keys preserve history across parent
 deletion; inserts and tenant-scoped reads remain available. Imports now append one idempotent
@@ -695,19 +701,31 @@ is preserved in its own commit and is not Milestone 3.2 work. Ruff checked 115 P
 reported `115 files already formatted`; it did not rewrite 115 files. Diff, Compose, changed-line
 secret, and generated-artifact checks pass.
 
-The live demo remains at migration `20260918_0006`. Its counts are higher than the earlier
-22-analysis baseline because two pre-auditability demo workflows created two analyses, two
-recommendations, 22 unique stage attempts, and 10 audit events, followed by one browser-recorded
-decision and its audit event. Retained logs cannot prove the exact human operator for either
-workflow initiation. Their rows predate the disposable append-only verification, so that
-verification did not create them. The local Compose runtime credential currently owns
-`audit_events` and is a PostgreSQL superuser: triggers protect ordinary application DML, not an
-owner/superuser with DDL access. A deployment-ready design must separate a migration-owner role
-from a restricted application-runtime role before claiming protection against a compromised
-runtime credential. This protection is neither universal nor cryptographic. The implementation
-is not applied live and is awaiting Jesse's ownership review; it is not complete.
-**Next action:** Jesse ownership review for Milestone 3.2, followed by separately authorized live
-migration planning if approved.
+The live demo is at migration `20260919_0007`. Before activation, a PostgreSQL custom-format backup
+(`repotriage-live-pre-0007-20260917T150053Z.dump`, 989,451 bytes, SHA-256
+`7896f51c73ed3863fd750c22a81aef1482aa8226c47af7591aa493129e57193b`) was created outside the
+repository and verified with `pg_restore --list`; it remains retained until Jesse separately
+authorizes deletion. Activation preserved every existing row count and every sorted-ID SHA-256
+fingerprint across all 11 application tables: 5 actors, 2 organizations, 2 repositories, 103
+issues, 8 repository documents, 410 retrieval chunks, 24 analyses, 24 recommendations, 3 human
+decisions, 124 stage attempts, and 97 audit events. Both append-only triggers are present and
+enabled, and both named audit-event parent foreign keys are `ON DELETE RESTRICT`. Live,
+transaction-safe demonstrations proved audit insert succeeds while update, delete, truncate, and
+protected-parent deletion are rejected; all demonstration rows rolled back or were naturally
+rejected, leaving zero residue. Tenant-scoped reads returned the expected 97 default-tenant and 0
+isolation-tenant events. All five services remained healthy/running with `AI_PROVIDER=mock`,
+`EMBEDDING_PROVIDER=local`, no paid-provider credential active, and no paid AI call. Only the API
+and worker images required rebuild/recreation because their running images predated migration
+0007; PostgreSQL, Redis, frontend, volumes, and live data were not reset or reseeded. Jesse
+approved this evidence and Milestone 3.2 as complete.
+
+The local Compose runtime credential still owns `audit_events` and is a PostgreSQL superuser:
+triggers protect ordinary application DML, not an owner/superuser with DDL access. A
+deployment-ready design must separate a migration-owner role from a restricted
+application-runtime role before claiming protection against a compromised runtime credential.
+This protection is neither universal nor cryptographic.
+**Next action:** Scope Milestone 3.3 — End-to-end observability against rubric §I and Critical Gate
+G8; implementation has not started.
 **Blockers:** None identified.
 
 **Ownership follow-up:** Review remaining technical ownership topics when their corresponding components are implemented.
