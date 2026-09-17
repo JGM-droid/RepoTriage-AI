@@ -23,6 +23,20 @@ const defaultOrgViewerActor = {
   display_name: "Default Demo Viewer",
   role: "viewer",
 };
+const defaultOrgAdministratorActor = {
+  id: "actor-default-administrator",
+  organization_id: "org-default",
+  organization_name: "Default Demo Organization",
+  display_name: "Default Demo Administrator",
+  role: "administrator",
+};
+const isolationOrgViewerActor = {
+  id: "actor-isolation-viewer",
+  organization_id: "org-isolation",
+  organization_name: "Isolation Demo Organization",
+  display_name: "Isolation Demo Viewer",
+  role: "viewer",
+};
 const isolationOrgAdminActor = {
   id: "actor-isolation-admin",
   organization_id: "org-isolation",
@@ -31,7 +45,13 @@ const isolationOrgAdminActor = {
   role: "administrator",
 };
 const demoActorsResponse = {
-  actors: [defaultOrgReviewerActor, defaultOrgViewerActor, isolationOrgAdminActor],
+  actors: [
+    defaultOrgReviewerActor,
+    isolationOrgAdminActor,
+    defaultOrgViewerActor,
+    isolationOrgViewerActor,
+    defaultOrgAdministratorActor,
+  ],
   notice: "These are synthetic demo identities for a portfolio walkthrough, not real user accounts.",
 };
 
@@ -187,8 +207,8 @@ const approvedTriageResponse = {
     recommendation_status: "approved",
     human_review_status: "decided",
     decision: "approve",
-    decided_by: "00000000-0000-0000-0000-000000000001",
-    decided_at: "2026-09-14T12:05:00Z",
+    decided_by: defaultOrgReviewerActor.id,
+    decided_at: "2026-09-17T07:31:00",
     rationale: null,
   },
 };
@@ -479,6 +499,10 @@ describe("App", () => {
     expect(screen.getByText("Cites: issue:5756")).toBeInTheDocument();
     expect(screen.getByText("Provider: mock (deterministic-v1)", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("Prompt: triage_narrative@1.0.0", { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Decision status" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Awaiting a decision from a Triage Reviewer or Administrator."),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Request revision" })).toBeInTheDocument();
@@ -558,10 +582,39 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run deterministic triage" }));
     fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
 
-    expect(await screen.findByText(/Recorded decision: Approve/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "Approved by Default Demo Reviewer on September 17, 2026 at 7:31 AM.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(defaultOrgReviewerActor.id)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Request revision" })).not.toBeInTheDocument();
+  });
+
+  it("uses a safe reviewer fallback when a persisted decision actor cannot be resolved", async () => {
+    const decisionWithUnknownActor = {
+      ...approvedTriageResponse,
+      human_review: {
+        ...approvedTriageResponse.human_review,
+        decided_by: "actor-not-returned-by-demo-endpoint",
+      },
+    };
+    mockStandardMount(vi.mocked(fetch));
+    vi.mocked(fetch)
+      .mockReturnValueOnce(jsonResponse(issueDetailResponse))
+      .mockReturnValueOnce(jsonResponse(decisionWithUnknownActor));
+
+    render(<App />);
+    fireEvent.click(await findIssueButton("CLI crashes on Windows"));
+
+    expect(
+      await screen.findByText(
+        "Approved by Unknown reviewer on September 17, 2026 at 7:31 AM.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("actor-not-returned-by-demo-endpoint")).not.toBeInTheDocument();
   });
 
   it("shows a decision submission failure without recording a decision", async () => {
@@ -659,16 +712,33 @@ describe("App", () => {
 
   // --- Milestone 3.1 Slice 2: identity selector, headers, isolation (see ADR 0014) ---
 
-  it("displays the selected actor's organization, display name, and role", async () => {
+  it("renders all five approved demo-user labels and the reviewer explanation", async () => {
     mockStandardMount(vi.mocked(fetch));
 
     render(<App />);
 
-    // Scoped to the summary line specifically -- the same text also
-    // appears (differently formatted) inside the <select>'s <option>s.
-    expect(await screen.findByText("Default Demo Organization", { selector: "strong" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Demo user" })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Select a simulated user to demonstrate organization-level access and permissions. These are not real sign-in accounts.",
+      ),
+    ).toBeInTheDocument();
+    const selector = screen.getByLabelText("Select a demo user");
+    expect(within(selector).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Pallets Demo Organization — Viewer (read-only)",
+      "Pallets Demo Organization — Triage Reviewer",
+      "Pallets Demo Organization — Administrator",
+      "Northwind Demo Organization — Viewer (read-only)",
+      "Northwind Demo Organization — Administrator",
+    ]);
+    expect(screen.getByText("Pallets Demo Organization", { selector: "strong" })).toBeInTheDocument();
     expect(screen.getByText("Default Demo Reviewer", { selector: ".identity-summary-actor" })).toBeInTheDocument();
-    expect(screen.getByText("reviewer", { selector: ".role-badge" })).toBeInTheDocument();
+    expect(screen.getByText("Triage Reviewer", { selector: ".role-badge" })).toHaveClass("role-reviewer");
+    expect(
+      screen.getByText(
+        "You can run triage and approve, reject, or request revisions within this organization.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("displays the administrator actor's organization, display name, and administrator role", async () => {
@@ -683,17 +753,32 @@ describe("App", () => {
     await findIssueButton("CLI crashes on Windows");
 
     fetchMock.mockReturnValueOnce(jsonResponse(otherOrgIssueListResponse));
-    fireEvent.change(await screen.findByLabelText("Organization / actor / role"), {
+    fireEvent.change(await screen.findByLabelText("Select a demo user"), {
       target: { value: isolationOrgAdminActor.id },
     });
 
     expect(
-      await screen.findByText("Isolation Demo Organization", { selector: "strong" }),
+      await screen.findByText("Northwind Demo Organization", { selector: "strong" }),
     ).toBeInTheDocument();
     expect(
       screen.getByText("Isolation Demo Administrator", { selector: ".identity-summary-actor" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("administrator", { selector: ".role-badge" })).toBeInTheDocument();
+    expect(screen.getByText("Administrator", { selector: ".role-badge" })).toHaveClass(
+      "role-administrator",
+    );
+    expect(
+      screen.getByText("You have full demo access within this organization."),
+    ).toBeInTheDocument();
+
+    fetchMock
+      .mockReturnValueOnce(jsonResponse({ ...otherOrgIssueListResponse.issues[0], body: "Northwind body" }))
+      .mockReturnValueOnce(jsonResponse(completedTriageResponse));
+    fireEvent.click(await findIssueButton("Isolation org's own issue"));
+
+    expect(await screen.findByRole("button", { name: "Run deterministic triage" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Request revision" })).toBeInTheDocument();
   });
 
   it("attaches the X-Demo-Actor-ID header to protected requests", async () => {
@@ -717,21 +802,39 @@ describe("App", () => {
     // Switch to the viewer actor in the same organization -- clears
     // state, then refetches this organization's issue list as the viewer.
     vi.mocked(fetch).mockReturnValueOnce(jsonResponse(issueListResponse));
-    fireEvent.change(screen.getByLabelText("Organization / actor / role"), {
+    fireEvent.change(screen.getByLabelText("Select a demo user"), {
       target: { value: defaultOrgViewerActor.id },
     });
     await screen.findByText(defaultOrgViewerActor.display_name, { selector: ".identity-summary-actor" });
 
     vi.mocked(fetch)
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
-      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404));
+      .mockReturnValueOnce(jsonResponse(completedTriageResponse));
     fireEvent.click(await findIssueButton("CLI crashes on Windows"));
-    await screen.findByText("No deterministic triage has been run for this issue yet.");
+    await screen.findByText("Decision status");
 
     expect(screen.queryByRole("button", { name: "Run deterministic triage" })).not.toBeInTheDocument();
     expect(
-      screen.getByText("Viewers can browse triage results but cannot start triage."),
+      screen.getByText(
+        "You have read-only access. You can review issues and completed results, but you cannot run triage or record a decision.",
+      ),
     ).toBeInTheDocument();
+    expect(screen.getByText("Read-only demo users cannot start triage.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "You have read-only access. You can review this result, but you cannot run triage or record a decision.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Request revision" })).not.toBeInTheDocument();
+
+    const issuesCalls = vi
+      .mocked(fetch)
+      .mock.calls.filter((call) => (call[0] as string).endsWith("/api/v1/issues"));
+    expect(headerOf(issuesCalls[issuesCalls.length - 1])["X-Demo-Actor-ID"]).toBe(
+      defaultOrgViewerActor.id,
+    );
   });
 
   it("switching from a reviewer in Organization A to an administrator in Organization B clears all previous tenant-specific state before the new request resolves", async () => {
@@ -748,7 +851,7 @@ describe("App", () => {
     // Switch to the isolation organization's administrator, whose issue
     // list is entirely different.
     fetchMock.mockReturnValueOnce(jsonResponse(otherOrgIssueListResponse));
-    fireEvent.change(screen.getByLabelText("Organization / actor / role"), {
+    fireEvent.change(screen.getByLabelText("Select a demo user"), {
       target: { value: isolationOrgAdminActor.id },
     });
 

@@ -1,4 +1,11 @@
 import type { DemoActor } from "../api/contracts";
+import {
+  getDemoActorOptionLabel,
+  getOrganizationDisplayLabel,
+  ROLE_DESCRIPTIONS,
+  ROLE_DISPLAY_LABELS,
+  sortDemoActorsForDisplay,
+} from "../demoIdentity";
 
 type IdentitySelectorProps = {
   actors: DemoActor[];
@@ -32,30 +39,38 @@ export function IdentitySelector({
   }
 
   const selected = actors.find((actor) => actor.id === selectedActorId) ?? null;
+  const displayedActors = sortDemoActorsForDisplay(actors);
 
   return (
     <section aria-labelledby="identity-selector-title" className="identity-selector">
-      <p className="eyebrow">Demo identity (not real authentication)</p>
-      <h2 id="identity-selector-title">Viewing as</h2>
-      <label htmlFor="demo-actor-select">Organization / actor / role</label>
+      <p className="eyebrow">Simulated access</p>
+      <h2 id="identity-selector-title">Demo user</h2>
+      <p>
+        Select a simulated user to demonstrate organization-level access and permissions. These are
+        not real sign-in accounts.
+      </p>
+      <label htmlFor="demo-actor-select">Select a demo user</label>
       <select
         id="demo-actor-select"
         value={selectedActorId ?? ""}
         onChange={(event) => onSelect(event.target.value)}
       >
-        {actors.map((actor) => (
+        {displayedActors.map((actor) => (
           <option key={actor.id} value={actor.id}>
-            {actor.organization_name} — {actor.display_name} ({actor.role})
+            {getDemoActorOptionLabel(actor)}
           </option>
         ))}
       </select>
       {selected ? (
         <p className="identity-summary">
-          <strong>{selected.organization_name}</strong> ·{" "}
+          <strong>{getOrganizationDisplayLabel(selected.organization_name)}</strong> ·{" "}
           <span className="identity-summary-actor">{selected.display_name}</span> ·{" "}
-          <span className={`role-badge role-${selected.role}`}>{selected.role}</span>
+          <span className={`role-badge role-${selected.role}`}>
+            {ROLE_DISPLAY_LABELS[selected.role]}
+          </span>
         </p>
       ) : null}
+      {selected ? <p className="role-description">{ROLE_DESCRIPTIONS[selected.role]}</p> : null}
     </section>
   );
 }

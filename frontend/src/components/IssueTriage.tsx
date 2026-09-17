@@ -1,4 +1,4 @@
-import type { TriageDecision, TriageResult } from "../api/contracts";
+import type { DemoActor, TriageDecision, TriageResult } from "../api/contracts";
 
 type IssueTriageProps = {
   result: TriageResult | null;
@@ -11,6 +11,7 @@ type IssueTriageProps = {
   onDecide: (decision: TriageDecision) => void;
   decisionSubmitting: boolean;
   decisionError: boolean;
+  actors: DemoActor[];
   // Milestone 3.1 Slice 2 (see ADR 0014): true only for reviewer/
   // administrator actors. Hiding these controls for a viewer is a
   // convenience, not the security boundary -- the backend independently
@@ -18,10 +19,10 @@ type IssueTriageProps = {
   canAct: boolean;
 };
 
-const DECISION_LABELS: Record<TriageDecision, string> = {
-  approve: "Approve",
-  reject: "Reject",
-  request_revision: "Request revision",
+const RECORDED_DECISION_LABELS: Record<TriageDecision, string> = {
+  approve: "Approved",
+  reject: "Rejected",
+  request_revision: "Revision requested",
 };
 
 const RUNNING_STATUS_LABELS: Record<string, string> = {
@@ -41,8 +42,13 @@ export function IssueTriage({
   onDecide,
   decisionSubmitting,
   decisionError,
+  actors,
   canAct,
 }: IssueTriageProps) {
+  const decidedBy = result?.human_review?.decided_by;
+  const reviewerName =
+    actors.find((actor) => actor.id === decidedBy)?.display_name ?? "Unknown reviewer";
+
   return (
     <section aria-labelledby="issue-triage-title" className="issue-triage">
       <div className="section-heading">
@@ -55,7 +61,7 @@ export function IssueTriage({
             {isRunning ? "Running..." : "Run deterministic triage"}
           </button>
         ) : (
-          <p className="viewer-notice">Viewers can browse triage results but cannot start triage.</p>
+          <p className="viewer-notice">Read-only demo users cannot start triage.</p>
         )}
       </div>
 
@@ -182,11 +188,18 @@ export function IssueTriage({
           ) : null}
 
           <div>
-            <h4>Human review status</h4>
-            <p>
-              This is a rule-based recommendation only; it has no effect until a human
-              reviewer records an explicit decision below.
-            </p>
+            <h4>Decision status</h4>
+
+            {result.human_review?.recommendation_status === "proposed" && canAct ? (
+              <p>Awaiting a decision from a Triage Reviewer or Administrator.</p>
+            ) : null}
+
+            {result.human_review?.recommendation_status === "proposed" && !canAct ? (
+              <p className="viewer-notice">
+                You have read-only access. You can review this result, but you cannot run triage or
+                record a decision.
+              </p>
+            ) : null}
 
             {result.human_review?.recommendation_status === "proposed" && canAct ? (
               <div className="decision-controls" role="group" aria-label="Record human decision">
@@ -214,21 +227,23 @@ export function IssueTriage({
               </div>
             ) : null}
 
-            {result.human_review?.recommendation_status === "proposed" && !canAct ? (
-              <p className="viewer-notice">Viewers can browse but cannot record a human decision.</p>
-            ) : null}
-
             {decisionError ? (
               <p role="alert">The human decision could not be recorded.</p>
             ) : null}
 
             {result.human_review?.decision ? (
               <p role="status">
-                Recorded decision: {DECISION_LABELS[result.human_review.decision]}
-                {result.human_review.decided_by ? ` by reviewer ${result.human_review.decided_by}` : ""}
+                {RECORDED_DECISION_LABELS[result.human_review.decision]} by {reviewerName}
                 {result.human_review.decided_at
-                  ? ` at ${new Date(result.human_review.decided_at).toLocaleString()}`
+                  ? ` on ${new Intl.DateTimeFormat("en-US", {
+                      month: "long",
+                      day: "numeric",
+                      year: "numeric",
+                      hour: "numeric",
+                      minute: "2-digit",
+                    }).format(new Date(result.human_review.decided_at))}`
                   : ""}
+                .
               </p>
             ) : null}
           </div>

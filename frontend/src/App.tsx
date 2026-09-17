@@ -426,6 +426,7 @@ export default function App() {
           onDecide={(decision) => void decideTriage(decision)}
           decisionSubmitting={decisionSubmitting}
           decisionError={decisionError}
+          actors={actors}
           canAct={canAct}
         />
       ) : null}
