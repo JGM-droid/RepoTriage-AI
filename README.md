@@ -6,7 +6,7 @@ RepoTriage AI addresses the repeated triage burden created by duplicate, incompl
 
 The planned workflow is `import → classify → retrieve evidence → assess → propose → human review → decision`. Planned capabilities include evidence-backed recommendations, human approval, provider-neutral AI routing, repository-grounded retrieval, evaluation, security guardrails, auditability, observability, and reproducible delivery.
 
-**Current status:** Release 1 — Product foundation / Milestone 1.6 — Release 1 verification in progress. Import, issue browsing, deterministic triage (classify → retrieve fixture evidence → assess → propose → human review), and an explicit human approve/reject/request-revision decision are implemented; none of it requires a paid AI provider.
+**Current status:** Release 3 — Enterprise hardening / Milestone 3.2 — Append-only auditability is next. Milestone 3.1 — Multi-tenancy and roles is complete and Jesse-approved; Release 3 remains in progress.
 
 ## Local Setup
 
@@ -41,6 +41,16 @@ docker compose down
 ```
 
 The frontend is available at `http://localhost:5173`. The Compose stack uses frontend port 5173, API port 8000, and PostgreSQL internally; it does not publish PostgreSQL.
+
+### Synthetic demo identity selector
+
+Demo identity discovery is disabled by default. To opt into the Milestone 3.1 browser walkthrough, start or recreate the stack with the tracked demo-only override:
+
+```powershell
+docker compose -f compose.yaml -f compose.demo-identity.yaml up --build -d
+```
+
+The override sets `DEMO_MODE_ENABLED=true` only for the API, enabling the frontend's selector for the five deterministic synthetic actors. `X-Demo-Actor-ID` is an unsigned demo identity choice, not authentication or a credential. Starting with ordinary `docker compose up` keeps identity discovery disabled.
 
 ## Offline Issue Import (Milestone 1.2)
 

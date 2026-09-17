@@ -475,7 +475,7 @@ At the end of every work session, update the Current Project State below. Do not
 ## 11. Current Project State
 
 **Current release:** Release 3 — Enterprise hardening
-**Current milestone:** Milestone 3.1 — Multi-tenancy and roles (in progress — Slice 1 of 2 complete; Slice 2 implemented, verified, and pushed, pending Jesse's ownership walkthrough)
+**Current milestone:** Milestone 3.2 — Append-only auditability (next; implementation not started)
 **Status:** Release 1 — Product foundation is complete. Milestones 2.1–2.5 are complete (Jesse
 approved all five): a provider-neutral AI gateway with deterministic fallback (ADR 0008);
 repository-grounded pgvector retrieval with a calibrated two-band confidence model, disclosed
@@ -587,15 +587,15 @@ real-model prompt-injection immunity; redaction covers only the three documented
 secret patterns; the original imported evidence snapshot remains unredacted by design (a
 deliberate scope boundary, not an oversight); the retrieval-policy evaluation remains a small,
 frozen sample and retains the accepted #6139 polysemy limitation; rate limiting is IP-keyed and
-fails open if Redis is unavailable. No Release 3 capability (multi-tenancy, roles,
-backend-enforced permissions, append-only auditability, observability, security hardening,
-containerized cloud delivery) has been implemented yet.
+fails open if Redis is unavailable. Release 3 remains in progress: Milestone 3.1 multi-tenancy,
+roles, and backend-enforced permissions is complete; append-only auditability, observability,
+security hardening, and containerized cloud delivery remain future Release 3 milestones.
 
 Milestone 3.1 — Multi-tenancy and roles, Slice 1 — organization/tenant data-model foundation, is
 complete and Jesse-approved. This slice is a **data-model foundation only**; it does not implement
-request identity, authentication, role enforcement, or API-level tenant scoping. Critical Gate G4
-("Automated negative tests prove cross-tenant records and vector results are inaccessible")
-**remains open**. [ADR 0013](adr/0013-organization-tenant-data-model.md) adds an `Organization`
+request identity, authentication, role enforcement, or API-level tenant scoping. At Slice 1
+approval, Critical Gate G4 remained open; it is now satisfied by Slice 2's automated and live
+evidence below. [ADR 0013](adr/0013-organization-tenant-data-model.md) adds an `Organization`
 model and migration `20260917_0005`, converting `Repository.tenant_id` (a bare, unenforced, nullable
 UUID reserved by ADR 0005 since migration 0001) into a real PostgreSQL foreign key
 (`ON DELETE RESTRICT`, not cascading) that is `NOT NULL`. Two deterministic, well-known
@@ -632,8 +632,8 @@ verified source; PostgreSQL, Redis, and the frontend were never touched. Jesse e
 Slice 1 as complete and authorized the live migration.
 
 Slice 2 — request identity, role-based authorization, and backend-enforced tenant scoping — is
-implemented and pushed for Jesse's ownership verification; it is not yet Jesse-approved and
-Critical Gate G4 remains open. [ADR 0014](adr/0014-synthetic-identity-and-tenant-isolation.md)
+complete and Jesse-approved, and Critical Gate G4 is satisfied.
+[ADR 0014](adr/0014-synthetic-identity-and-tenant-isolation.md)
 adds a synthetic demo-identity mechanism (`X-Demo-Actor-ID`, explicitly documented everywhere as
 not production authentication), a closed `viewer`/`reviewer`/`administrator` role set enforced by
 both a database `CHECK` constraint and `app.api.identity.require_role`, centralized tenant-scoping
@@ -655,23 +655,31 @@ success. This still does not, and is not claimed to, wrap the external AI provid
 database transaction (no real network call can be); authorization is instead checked immediately
 before that call and again immediately before its result is persisted. Verified: full backend suite
 488/488 passed against fresh disposable PostgreSQL/Redis; frontend suite 28/28 passed; ruff
-format/lint clean; `git diff --check` clean; Compose configuration validated; secrets and
-generated-artifact scans clean. The live demo database was not touched by this slice: migration head
-remains `20260917_0005` (migration `20260918_0006` has not been applied live), 100 issues, 405
-retrieval chunks, all five services healthy, `AI_PROVIDER=mock`/`EMBEDDING_PROVIDER=local`, zero
-paid provider calls. Not yet claimed: universal security or transactional protection around the
-external AI call (see above); Critical Gate G4 satisfied against the live demo database; Jesse's
-ownership walkthrough; or Milestone 3.1 complete. Applying migration `20260918_0006` to the live
-demo database, seeding live actors, and closing G4 are explicitly deferred to a separate,
-Jesse-approved activation step.
+format/lint clean; `git diff --check` clean; base and opt-in demo Compose configurations validated;
+secrets and generated-artifact scans clean. Migration `20260918_0006` is active in the live demo,
+its five deterministic actors are present, and the synthetic isolation fixture makes cross-tenant
+record and vector boundaries visible. Live counts after Jesse's approved browser walkthrough are 2
+organizations, 2 repositories, 103 issues, 410 retrieval chunks, 24 analyses, 24 recommendations,
+3 human decisions, 124 stage attempts, and 97 audit events; the two additional completed analyses
+and one explicit decision are attributable to that walkthrough. All five services are healthy/running
+as defined by Compose with `AI_PROVIDER=mock` and `EMBEDDING_PROVIDER=local`. Automated negative
+tests and live checks proved tenant scoping for records, retrieval/vector results, analyses,
+recommendations, decisions, attempts, and audit/provenance data; role checks and all four
+background-workflow authorization checkpoints failed closed; AI completion created no human
+decision; and an explicit reviewer action remained mandatory. Jesse's browser walkthrough
+confirmed viewer restrictions, explicit reviewer approval with persisted actor/timestamp, mock
+provider and `triage_narrative@1.1.0` provenance, isolation-organization visibility limited to
+synthetic issues #1–#3, and tenant-specific state clearing when identities changed. Jesse approved
+the walkthrough and closure of Critical Gate G4 and Milestone 3.1. No paid provider call occurred.
+The verified pre-0006 backup is retained outside the repository. Residual boundaries remain:
+`X-Demo-Actor-ID` is synthetic identity selection, not real authentication; external AI calls are
+not transactionally enclosed, so authorization is checked immediately before inference and again
+before persistence; and rate limiting remains IP-keyed and fail-open during Redis outages.
 
-**Last approved decision:** Milestone 3.1 Slice 1 — organization/tenant data-model foundation
-(ADR 0013, migration `20260917_0005`) — approved complete by Jesse, including authorization to
-apply the migration to the live demo database.
-**Next action:** Jesse's ownership walkthrough of Milestone 3.1 Slice 2 (ADR 0014) — review of
-this pushed commit's CI result, then, if approved, a separate, explicitly-approved live activation
-step (apply migration `20260918_0006`, seed live actors) before Critical Gate G4 and Milestone 3.1
-can be closed.
+**Last approved decision:** Milestone 3.1 — Multi-tenancy and roles (ADR 0013 and ADR 0014) and
+Critical Gate G4 are complete after Jesse's approved live ownership walkthrough.
+**Next action:** Begin Milestone 3.2 — Append-only auditability: capture imports, analyses,
+workflow transitions, routing decisions, approvals, rejections, edits, and administrative changes.
 **Blockers:** None identified.
 
 **Ownership follow-up:** Review remaining technical ownership topics when their corresponding components are implemented.

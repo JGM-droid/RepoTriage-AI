@@ -1,0 +1,6 @@
+# Explicit demo-only opt-in for Milestone 3.1's synthetic identity selector.
+# X-Demo-Actor-ID is not authentication and must remain disabled by default.
+services:
+  api:
+    environment:
+      DEMO_MODE_ENABLED: "true"
