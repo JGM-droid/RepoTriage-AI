@@ -11,7 +11,14 @@ from sqlalchemy.orm import Session
 import app.workflow.tasks as workflow_tasks
 from app.api.v1.triage import get_triage_session
 from app.main import app
-from app.models.core import Analysis, Issue, Recommendation, Repository
+from app.models.core import (
+    DEFAULT_ORG_REVIEWER_ACTOR_ID,
+    DEFAULT_ORGANIZATION_ID,
+    Analysis,
+    Issue,
+    Recommendation,
+    Repository,
+)
 from app.triage.service import status_history
 
 TRUNCATE_CORE_TABLES = (
@@ -43,7 +50,10 @@ def client(database_session: Session) -> Iterator[TestClient]:
 
     app.dependency_overrides[get_triage_session] = override_session
     try:
-        yield TestClient(app)
+        # Reviewer role: this file starts triage and polls its status,
+        # which requires reviewer/administrator to start (Milestone 3.1
+        # Slice 2; see ADR 0014).
+        yield TestClient(app, headers={"X-Demo-Actor-ID": str(DEFAULT_ORG_REVIEWER_ACTOR_ID)})
     finally:
         app.dependency_overrides.clear()
 
@@ -57,6 +67,7 @@ def add_issue(
     external_number: int = 1,
 ) -> Issue:
     repository = Repository(
+        tenant_id=DEFAULT_ORGANIZATION_ID,
         name=f"pallets/flask-{external_number}",
         source_url=f"https://github.com/pallets/flask-{external_number}",
     )
@@ -134,13 +145,17 @@ def test_polling_after_start_returns_the_completed_result_with_separated_section
         "completed",
     ]
     assert [attempt["stage"] for attempt in payload["stage_attempts"]] == [
+        "authorize",
         "classify",
         "retrieve_fixture_evidence",
         "assess",
         "propose",
+        "authorize_before_retrieval",
         "retrieve_related_evidence",
+        "authorize_before_ai_inference",
         "ai_inference",
         "human_review",
+        "authorize_before_persistence",
     ]
     assert all(attempt["status"] == "succeeded" for attempt in payload["stage_attempts"])
 

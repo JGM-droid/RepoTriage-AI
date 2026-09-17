@@ -4,9 +4,15 @@ The only place `app.retrieval` is wired into the triage pipeline (see
 `app.workflow.tasks`). Builds a bounded, issue-specific query from
 already-computed deterministic values, then retrieves. A genuine retrieval
 failure (e.g. a transient database error inside the query) degrades to an
-explicit empty result rather than failing the whole workflow attempt — a
-configuration/schema problem (`EmbeddingDimensionMismatchError`) is not
-treated as a controlled failure and is re-raised so it fails clearly.
+explicit empty result rather than failing the whole workflow attempt —
+`EmbeddingDimensionMismatchError` (a configuration/schema problem) and
+`RetrievalTenantMismatchError` (a tenant-isolation invariant violation;
+Milestone 3.1 Slice 2, see ADR 0014) are never treated as controlled,
+degrade-to-empty failures: both are re-raised so the whole workflow
+attempt fails loudly, through the same bounded-retry/stage-attempt
+machinery every other stage failure uses, rather than silently
+continuing toward AI inference and recommendation creation on a
+security-relevant condition.
 """
 
 from __future__ import annotations
@@ -18,7 +24,7 @@ from sqlalchemy.orm import Session
 from app.config import Settings, get_settings
 from app.retrieval.contracts import RetrievalRequest, RetrievalResult
 from app.retrieval.embedding import EmbeddingDimensionMismatchError, build_embedding_adapter
-from app.retrieval.service import retrieve_related_evidence
+from app.retrieval.service import RetrievalTenantMismatchError, retrieve_related_evidence
 from app.triage.rules import Classification
 
 STATUS_FAILED = "failed"
@@ -97,7 +103,7 @@ def run_retrieve_related_evidence_stage(
     )
     try:
         return retrieve_related_evidence(session, request, adapter)
-    except EmbeddingDimensionMismatchError:
+    except (EmbeddingDimensionMismatchError, RetrievalTenantMismatchError):
         raise
     except Exception as exc:
         return RetrievalResult(

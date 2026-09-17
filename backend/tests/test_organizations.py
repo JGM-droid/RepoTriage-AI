@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from app.api.v1.issues import get_issue_session
 from app.main import app
 from app.models.core import (
+    DEFAULT_ORG_VIEWER_ACTOR_ID,
     DEFAULT_ORGANIZATION_ID,
     ISOLATION_DEMO_ORGANIZATION_ID,
     Issue,
@@ -136,17 +137,17 @@ def test_a_repository_belongs_to_exactly_one_organization(database_session: Sess
     assert fetched.organization.id == DEFAULT_ORGANIZATION_ID
 
 
-def test_a_repository_defaults_to_the_default_organization_when_omitted(
+def test_a_repository_with_an_omitted_tenant_now_fails_closed(
     database_session: Session,
 ) -> None:
-    """The server-side default (see ADR 0013's backward-compatibility
-    decision) -- proves the existing importer/test construction path
-    (which never specifies tenant_id) still produces a valid row."""
-    repository = add_repository(database_session, name="pallets/flask-omitted-tenant")
-    database_session.commit()
-
-    fetched = database_session.get(Repository, repository.id)
-    assert fetched.tenant_id == DEFAULT_ORGANIZATION_ID
+    """ADR 0013's Slice 1 `server_default` was temporary compatibility
+    behavior only. Migration 20260918_0006 (Milestone 3.1 Slice 2; see
+    ADR 0014) removes it: a repository created with no explicit
+    `tenant_id` now fails closed (NOT NULL violation) instead of
+    silently landing in the default organization."""
+    with pytest.raises(IntegrityError):
+        add_repository(database_session, name="pallets/flask-omitted-tenant")
+        database_session.commit()
 
 
 def test_a_repository_cannot_reference_an_unknown_organization(
@@ -212,7 +213,7 @@ def test_organization_slug_uniqueness_is_enforced(database_session: Session) -> 
         database_session.commit()
 
 
-# --- honest boundary: no request-level tenant isolation yet ------------------
+# --- request-level tenant isolation (Milestone 3.1 Slice 2; see ADR 0014) ----
 
 
 @pytest.fixture()
@@ -227,19 +228,17 @@ def client(database_session: Session) -> Iterator[TestClient]:
         app.dependency_overrides.clear()
 
 
-def test_slice_1_provides_no_request_level_tenant_isolation_yet(
+def test_request_level_tenant_isolation_is_now_enforced(
     client: TestClient, database_session: Session
 ) -> None:
-    """Honest boundary test (Milestone 3.1 Slice 1; see ADR 0013): calls
-    the real, completely unmodified `GET /api/v1/issues` endpoint -- this
-    test does not filter by tenant itself, so it proves the API's actual
-    current behavior, not a manually-scoped stand-in for it. With one
-    issue in the default organization's repository and one in the
-    isolation-demo organization's repository, both are visible through the
-    same unscoped call. This is expected, current behavior for Slice 1 --
-    NOT a Critical Gate G4 pass. Gate G4 requires automated negative tests
-    proving cross-tenant records are *inaccessible*, which is Slice 2's
-    job (request identity + backend-enforced scoping), not this one's."""
+    """Slice 1 (ADR 0013) deliberately left `GET /api/v1/issues` unscoped
+    and had an explicit test proving that boundary. Slice 2 (ADR 0014)
+    closes it: calls the real, unmodified endpoint as a real,
+    database-resolved default-organization actor and proves the
+    isolation-demo organization's issue is never visible -- see
+    `test_tenant_isolation_api.py` for the full cross-tenant test suite
+    (list filtering, direct ids, retrieval, workflow) this one line item
+    is the narrowest possible instance of."""
     default_org_repository = add_repository(
         database_session, name="default-org/repo", tenant_id=DEFAULT_ORGANIZATION_ID
     )
@@ -250,11 +249,11 @@ def test_slice_1_provides_no_request_level_tenant_isolation_yet(
     isolation_org_issue = add_issue(database_session, isolation_org_repository)
     database_session.commit()
 
-    response = client.get("/api/v1/issues")
+    response = client.get(
+        "/api/v1/issues", headers={"X-Demo-Actor-ID": str(DEFAULT_ORG_VIEWER_ACTOR_ID)}
+    )
 
     assert response.status_code == 200
     returned_ids = {issue["id"] for issue in response.json()["issues"]}
-    # Both organizations' issues are visible -- proving no isolation exists
-    # yet, exactly as Slice 1 is scoped to leave it.
     assert str(default_org_issue.id) in returned_ids
-    assert str(isolation_org_issue.id) in returned_ids
+    assert str(isolation_org_issue.id) not in returned_ids

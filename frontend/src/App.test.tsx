@@ -1,9 +1,40 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
 
 const healthResponse = { service: "repotriage-api", status: "healthy" };
+
+// Milestone 3.1 Slice 2 (see ADR 0014): every test authenticates as one
+// of these synthetic demo actors. The reviewer is first so it is
+// auto-selected by default, preserving every pre-Slice-2 triage/decision
+// test's behavior without each one needing to pick a role explicitly.
+const defaultOrgReviewerActor = {
+  id: "actor-default-reviewer",
+  organization_id: "org-default",
+  organization_name: "Default Demo Organization",
+  display_name: "Default Demo Reviewer",
+  role: "reviewer",
+};
+const defaultOrgViewerActor = {
+  id: "actor-default-viewer",
+  organization_id: "org-default",
+  organization_name: "Default Demo Organization",
+  display_name: "Default Demo Viewer",
+  role: "viewer",
+};
+const isolationOrgAdminActor = {
+  id: "actor-isolation-admin",
+  organization_id: "org-isolation",
+  organization_name: "Isolation Demo Organization",
+  display_name: "Isolation Demo Administrator",
+  role: "administrator",
+};
+const demoActorsResponse = {
+  actors: [defaultOrgReviewerActor, defaultOrgViewerActor, isolationOrgAdminActor],
+  notice: "These are synthetic demo identities for a portfolio walkthrough, not real user accounts.",
+};
+
 const issueListResponse = {
   issues: [
     {
@@ -18,6 +49,24 @@ const issueListResponse = {
         id: "repo-1",
         name: "pallets/flask",
         source_url: "https://github.com/pallets/flask",
+      },
+    },
+  ],
+};
+const otherOrgIssueListResponse = {
+  issues: [
+    {
+      id: "issue-99",
+      external_number: 202,
+      title: "Isolation org's own issue",
+      state: "open",
+      source_url: "https://github.com/acme-internal/northwind-portal/issues/202",
+      created_at: "2026-09-18T12:00:00Z",
+      updated_at: "2026-09-18T12:30:00Z",
+      repository: {
+        id: "repo-99",
+        name: "acme-internal/northwind-portal",
+        source_url: "https://github.com/acme-internal/northwind-portal",
       },
     },
   ],
@@ -179,6 +228,21 @@ async function findIssueButton(title: string) {
   return button as HTMLButtonElement;
 }
 
+/** Mocks the standard mount sequence: health, demo actors (reviewer
+ * first, auto-selected), issue list -- the prefix every pre-Slice-2 test
+ * needs before its own scenario-specific mocks. */
+function mockStandardMount(fetchMock: ReturnType<typeof vi.mocked<typeof fetch>>) {
+  fetchMock
+    .mockReturnValueOnce(jsonResponse(healthResponse))
+    .mockReturnValueOnce(jsonResponse(demoActorsResponse))
+    .mockReturnValueOnce(jsonResponse(issueListResponse));
+}
+
+function headerOf(call: unknown[]): Record<string, string> {
+  const init = call[1] as RequestInit | undefined;
+  return (init?.headers as Record<string, string>) ?? {};
+}
+
 describe("App", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn());
@@ -195,13 +259,11 @@ describe("App", () => {
     render(<App />);
 
     expect(screen.getByText("Checking backend service...")).toBeInTheDocument();
-    expect(screen.getByText("Loading imported issues...")).toBeInTheDocument();
+    expect(screen.getByText("Loading demo identities...")).toBeInTheDocument();
   });
 
   it("shows a healthy response and imported issue list", async () => {
-    vi.mocked(fetch)
-      .mockReturnValueOnce(jsonResponse(healthResponse))
-      .mockReturnValueOnce(jsonResponse(issueListResponse));
+    mockStandardMount(vi.mocked(fetch));
 
     render(<App />);
 
@@ -213,41 +275,44 @@ describe("App", () => {
   it("shows an empty state when no issues are imported", async () => {
     vi.mocked(fetch)
       .mockReturnValueOnce(jsonResponse(healthResponse))
+      .mockReturnValueOnce(jsonResponse(demoActorsResponse))
       .mockReturnValueOnce(jsonResponse({ issues: [] }));
 
     render(<App />);
 
-    expect(await screen.findByText("No imported issues are available yet.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("No imported issues are available yet for this organization."),
+    ).toBeInTheDocument();
   });
 
   it("shows service and issue API errors independently", async () => {
     vi.mocked(fetch)
       .mockRejectedValueOnce(new Error("offline"))
-      .mockRejectedValueOnce(new Error("database unavailable"));
+      .mockRejectedValueOnce(new Error("demo identities unavailable"));
 
     render(<App />);
 
     expect(await screen.findByText("The backend service is unavailable.")).toBeInTheDocument();
-    expect(await screen.findByText("Imported issues are unavailable.")).toBeInTheDocument();
+    expect(await screen.findByText("Demo identities are unavailable.")).toBeInTheDocument();
   });
 
-  it("retries after a failed request", async () => {
+  it("shows demo-mode-disabled messaging when the demo actor endpoint is absent", async () => {
     vi.mocked(fetch)
-      .mockRejectedValueOnce(new Error("offline"))
-      .mockReturnValueOnce(jsonResponse({ issues: [] }))
-      .mockReturnValueOnce(jsonResponse(healthResponse));
+      .mockReturnValueOnce(jsonResponse(healthResponse))
+      .mockReturnValueOnce(jsonResponse({ error: "not_found", message: "Not Found" }, 404));
 
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
 
-    await waitFor(() => expect(screen.getByText("Healthy: repotriage-api")).toBeInTheDocument());
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(
+      await screen.findByText(
+        "Demo identity mode is disabled on this deployment, so no protected data can be shown here.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("opens an issue detail view", async () => {
+    mockStandardMount(vi.mocked(fetch));
     vi.mocked(fetch)
-      .mockReturnValueOnce(jsonResponse(healthResponse))
-      .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404));
 
@@ -260,9 +325,8 @@ describe("App", () => {
   });
 
   it("shows the initial no-analysis triage state for a newly opened issue", async () => {
+    mockStandardMount(vi.mocked(fetch));
     vi.mocked(fetch)
-      .mockReturnValueOnce(jsonResponse(healthResponse))
-      .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404));
 
@@ -275,9 +339,8 @@ describe("App", () => {
   });
 
   it("shows a queued/running state while deterministic triage executes", async () => {
+    mockStandardMount(vi.mocked(fetch));
     vi.mocked(fetch)
-      .mockReturnValueOnce(jsonResponse(healthResponse))
-      .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
       .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
@@ -293,9 +356,8 @@ describe("App", () => {
 
   it("shows a retrying state after a transient failure, then polls to completion", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockStandardMount(vi.mocked(fetch));
     vi.mocked(fetch)
-      .mockReturnValueOnce(jsonResponse(healthResponse))
-      .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
       .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
@@ -321,9 +383,8 @@ describe("App", () => {
 
   it("stops polling once a terminal state is reached", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockStandardMount(vi.mocked(fetch));
     vi.mocked(fetch)
-      .mockReturnValueOnce(jsonResponse(healthResponse))
-      .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
       .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
@@ -345,9 +406,8 @@ describe("App", () => {
   it("pauses automatic polling at the attempt cap without re-enabling Run, and Refresh status resumes polling without starting a new workflow", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const fetchMock = vi.mocked(fetch);
+    mockStandardMount(fetchMock);
     fetchMock
-      .mockReturnValueOnce(jsonResponse(healthResponse))
-      .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
       .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
@@ -389,9 +449,8 @@ describe("App", () => {
   });
 
   it("shows the separated triage result after a completed run", async () => {
+    mockStandardMount(vi.mocked(fetch));
     vi.mocked(fetch)
-      .mockReturnValueOnce(jsonResponse(healthResponse))
-      .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
       .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
@@ -437,9 +496,8 @@ describe("App", () => {
       },
       ai_inference: { ...completedTriageResponse.ai_inference, citations: [] },
     };
+    mockStandardMount(vi.mocked(fetch));
     vi.mocked(fetch)
-      .mockReturnValueOnce(jsonResponse(healthResponse))
-      .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
       .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
@@ -459,9 +517,8 @@ describe("App", () => {
   });
 
   it("clearly separates AI inference from the deterministic sections and shows fallback provenance", async () => {
+    mockStandardMount(vi.mocked(fetch));
     vi.mocked(fetch)
-      .mockReturnValueOnce(jsonResponse(healthResponse))
-      .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
       .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
@@ -487,9 +544,8 @@ describe("App", () => {
   });
 
   it("submits a human decision and shows the recorded outcome", async () => {
+    mockStandardMount(vi.mocked(fetch));
     vi.mocked(fetch)
-      .mockReturnValueOnce(jsonResponse(healthResponse))
-      .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
       .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
@@ -509,9 +565,8 @@ describe("App", () => {
   });
 
   it("shows a decision submission failure without recording a decision", async () => {
+    mockStandardMount(vi.mocked(fetch));
     vi.mocked(fetch)
-      .mockReturnValueOnce(jsonResponse(healthResponse))
-      .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
       .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
@@ -529,9 +584,8 @@ describe("App", () => {
   });
 
   it("shows a failed triage state", async () => {
+    mockStandardMount(vi.mocked(fetch));
     vi.mocked(fetch)
-      .mockReturnValueOnce(jsonResponse(healthResponse))
-      .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
       .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
@@ -546,9 +600,8 @@ describe("App", () => {
   });
 
   it("shows a timed-out triage state", async () => {
+    mockStandardMount(vi.mocked(fetch));
     vi.mocked(fetch)
-      .mockReturnValueOnce(jsonResponse(healthResponse))
-      .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse(issueDetailResponse))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
       .mockReturnValueOnce(jsonResponse(startedTriageResponse, 202))
@@ -564,10 +617,9 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows issue not found when detail returns 404", async () => {
+  it("shows issue not found when detail returns 404 (also the cross-tenant-guess case)", async () => {
+    mockStandardMount(vi.mocked(fetch));
     vi.mocked(fetch)
-      .mockReturnValueOnce(jsonResponse(healthResponse))
-      .mockReturnValueOnce(jsonResponse(issueListResponse))
       .mockReturnValueOnce(jsonResponse({ error: "issue_not_found", message: "Issue not found." }, 404))
       .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404));
 
@@ -575,5 +627,186 @@ describe("App", () => {
     fireEvent.click(await findIssueButton("CLI crashes on Windows"));
 
     expect(await screen.findByText("Issue not found.")).toBeInTheDocument();
+  });
+
+  it("renders a cross-tenant 404 exactly like a genuinely unknown id, disclosing nothing about the other organization", async () => {
+    // The backend's own contract (ADR 0014) makes a cross-tenant id and a
+    // truly nonexistent one produce byte-identical 404 responses -- this
+    // test proves the frontend doesn't introduce a disclosure the backend
+    // itself avoids: no organization name, no "belongs to another
+    // organization" wording, no hint the id is valid elsewhere.
+    mockStandardMount(vi.mocked(fetch));
+    vi.mocked(fetch)
+      .mockReturnValueOnce(jsonResponse({ error: "issue_not_found", message: "Issue not found." }, 404))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404));
+
+    render(<App />);
+    fireEvent.click(await findIssueButton("CLI crashes on Windows"));
+
+    const notFoundMessage = await screen.findByText("Issue not found.");
+    expect(notFoundMessage).toBeInTheDocument();
+    // Scoped to the issue-detail region specifically -- the identity
+    // selector legitimately always lists the isolation organization's
+    // actors (that's the demo-actor-discovery feature working as
+    // intended), so a page-wide search for "isolation" would be a false
+    // positive. Within the detail region itself, nothing should name
+    // another organization or hint the id is valid elsewhere.
+    const detailRegion = screen.getByRole("article", { name: "Issue detail" });
+    expect(within(detailRegion).queryByText(/isolation/i)).not.toBeInTheDocument();
+    expect(within(detailRegion).queryByText(/another organization/i)).not.toBeInTheDocument();
+    expect(within(detailRegion).queryByText(/belongs to/i)).not.toBeInTheDocument();
+  });
+
+  // --- Milestone 3.1 Slice 2: identity selector, headers, isolation (see ADR 0014) ---
+
+  it("displays the selected actor's organization, display name, and role", async () => {
+    mockStandardMount(vi.mocked(fetch));
+
+    render(<App />);
+
+    // Scoped to the summary line specifically -- the same text also
+    // appears (differently formatted) inside the <select>'s <option>s.
+    expect(await screen.findByText("Default Demo Organization", { selector: "strong" })).toBeInTheDocument();
+    expect(screen.getByText("Default Demo Reviewer", { selector: ".identity-summary-actor" })).toBeInTheDocument();
+    expect(screen.getByText("reviewer", { selector: ".role-badge" })).toBeInTheDocument();
+  });
+
+  it("displays the administrator actor's organization, display name, and administrator role", async () => {
+    // Explicitly exercises the administrator role -- a generic
+    // identity-display test using the default reviewer actor does not
+    // count as proof this role renders correctly (see ADR 0014's
+    // frontend acceptance requirements).
+    const fetchMock = vi.mocked(fetch);
+    mockStandardMount(fetchMock);
+
+    render(<App />);
+    await findIssueButton("CLI crashes on Windows");
+
+    fetchMock.mockReturnValueOnce(jsonResponse(otherOrgIssueListResponse));
+    fireEvent.change(await screen.findByLabelText("Organization / actor / role"), {
+      target: { value: isolationOrgAdminActor.id },
+    });
+
+    expect(
+      await screen.findByText("Isolation Demo Organization", { selector: "strong" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Isolation Demo Administrator", { selector: ".identity-summary-actor" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("administrator", { selector: ".role-badge" })).toBeInTheDocument();
+  });
+
+  it("attaches the X-Demo-Actor-ID header to protected requests", async () => {
+    const fetchMock = vi.mocked(fetch);
+    mockStandardMount(fetchMock);
+
+    render(<App />);
+    await findIssueButton("CLI crashes on Windows");
+
+    const issuesCall = fetchMock.mock.calls.find((call) => (call[0] as string).endsWith("/api/v1/issues"));
+    expect(issuesCall).toBeDefined();
+    expect(headerOf(issuesCall!)["X-Demo-Actor-ID"]).toBe(defaultOrgReviewerActor.id);
+  });
+
+  it("hides reviewer-only controls and shows a viewer notice for a viewer actor", async () => {
+    mockStandardMount(vi.mocked(fetch));
+
+    render(<App />);
+    await findIssueButton("CLI crashes on Windows");
+
+    // Switch to the viewer actor in the same organization -- clears
+    // state, then refetches this organization's issue list as the viewer.
+    vi.mocked(fetch).mockReturnValueOnce(jsonResponse(issueListResponse));
+    fireEvent.change(screen.getByLabelText("Organization / actor / role"), {
+      target: { value: defaultOrgViewerActor.id },
+    });
+    await screen.findByText(defaultOrgViewerActor.display_name, { selector: ".identity-summary-actor" });
+
+    vi.mocked(fetch)
+      .mockReturnValueOnce(jsonResponse(issueDetailResponse))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404));
+    fireEvent.click(await findIssueButton("CLI crashes on Windows"));
+    await screen.findByText("No deterministic triage has been run for this issue yet.");
+
+    expect(screen.queryByRole("button", { name: "Run deterministic triage" })).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Viewers can browse triage results but cannot start triage."),
+    ).toBeInTheDocument();
+  });
+
+  it("switching from a reviewer in Organization A to an administrator in Organization B clears all previous tenant-specific state before the new request resolves", async () => {
+    const fetchMock = vi.mocked(fetch);
+    mockStandardMount(fetchMock);
+    fetchMock
+      .mockReturnValueOnce(jsonResponse(issueDetailResponse))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404));
+
+    render(<App />);
+    fireEvent.click(await findIssueButton("CLI crashes on Windows"));
+    await screen.findByRole("heading", { name: "CLI crashes on Windows" });
+
+    // Switch to the isolation organization's administrator, whose issue
+    // list is entirely different.
+    fetchMock.mockReturnValueOnce(jsonResponse(otherOrgIssueListResponse));
+    fireEvent.change(screen.getByLabelText("Organization / actor / role"), {
+      target: { value: isolationOrgAdminActor.id },
+    });
+
+    // The previous organization's issue and its open detail view are
+    // never shown, not even momentarily -- and the new organization's own
+    // issue appears once its list resolves.
+    await screen.findByText("Isolation org's own issue");
+    expect(screen.queryByText("CLI crashes on Windows")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "CLI crashes on Windows" })).not.toBeInTheDocument();
+    expect(screen.getByText("Select an imported issue to inspect its stored metadata.")).toBeInTheDocument();
+
+    const issuesCalls = fetchMock.mock.calls.filter((call) => (call[0] as string).endsWith("/api/v1/issues"));
+    const lastIssuesCall = issuesCalls[issuesCalls.length - 1];
+    expect(headerOf(lastIssuesCall)["X-Demo-Actor-ID"]).toBe(isolationOrgAdminActor.id);
+  });
+
+  it("shows a safe message when the issue list request is unauthorized (401)", async () => {
+    vi.mocked(fetch)
+      .mockReturnValueOnce(jsonResponse(healthResponse))
+      .mockReturnValueOnce(jsonResponse(demoActorsResponse))
+      .mockReturnValueOnce(jsonResponse({ error: "unknown_actor", message: "This actor is unknown or disabled." }, 401));
+
+    render(<App />);
+
+    expect(
+      await screen.findByText("Your demo identity could not be verified. Try selecting an identity again."),
+    ).toBeInTheDocument();
+  });
+
+  it("safely handles a role-forbidden (403) triage start without crashing or misleading state", async () => {
+    mockStandardMount(vi.mocked(fetch));
+    vi.mocked(fetch)
+      .mockReturnValueOnce(jsonResponse(issueDetailResponse))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
+      .mockReturnValueOnce(
+        jsonResponse({ error: "insufficient_role", message: "This actor's role does not permit this action." }, 403),
+      );
+
+    render(<App />);
+    fireEvent.click(await findIssueButton("CLI crashes on Windows"));
+    await screen.findByText("No deterministic triage has been run for this issue yet.");
+    fireEvent.click(screen.getByRole("button", { name: "Run deterministic triage" }));
+
+    expect(await screen.findByText("Deterministic triage is unavailable.")).toBeInTheDocument();
+  });
+
+  it("waits for the retry click before re-fetching health and demo identities", async () => {
+    vi.mocked(fetch)
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockRejectedValueOnce(new Error("demo identities unavailable"));
+
+    render(<App />);
+    await screen.findByText("The backend service is unavailable.");
+
+    vi.mocked(fetch).mockReturnValueOnce(jsonResponse(healthResponse));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(screen.getByText("Healthy: repotriage-api")).toBeInTheDocument());
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 });

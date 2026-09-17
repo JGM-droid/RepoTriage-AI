@@ -182,6 +182,47 @@ dd {
   margin: 10px 0;
 }
 
+.identity-selector select {
+  font-family: inherit;
+  font-size: 1rem;
+  padding: 6px 10px;
+  border: 1px solid #164b55;
+  border-radius: 4px;
+  margin-left: 8px;
+}
+
+.identity-summary {
+  margin-top: 10px;
+}
+
+.role-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: #e4eeec;
+  color: #164b55;
+}
+
+.role-badge.role-reviewer,
+.role-badge.role-administrator {
+  background: #164b55;
+  color: #fff;
+}
+
+.viewer-notice {
+  color: #7a3e1d;
+  font-style: italic;
+}
+
+.demo-mode-disabled {
+  color: #7a3e1d;
+  font-weight: 700;
+}
+
 @media (max-width: 760px) {
   h1 {
     font-size: 2.25rem;

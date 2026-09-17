@@ -59,6 +59,28 @@ class ErrorResponse(BaseModel):
     message: str
 
 
+class DemoActorSummary(BaseModel):
+    """Only the fields a demo identity selector needs to display and
+    submit -- never a credential, since a demo actor has none (see ADR
+    0014). `id` is the exact value a client sends back as the
+    `X-Demo-Actor-ID` header, not a secret."""
+
+    id: UUID
+    organization_id: UUID
+    organization_name: str
+    display_name: str
+    role: str
+
+
+class DemoActorListResponse(BaseModel):
+    actors: list[DemoActorSummary]
+    notice: str = (
+        "These are synthetic demo identities for a portfolio walkthrough, "
+        "not real user accounts. X-Demo-Actor-ID is not production "
+        "authentication."
+    )
+
+
 class AnalysisRecord(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

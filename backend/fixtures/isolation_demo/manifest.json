@@ -1,0 +1,11 @@
+{
+  "captured_at": "2026-09-18T00:00:00Z",
+  "content_checksum": "26e58f5a15886ab492b54d8d46af7197f4d5b2da4d7e0896da671202de2b0ef9",
+  "content_checksum_algorithm": "sha256",
+  "fixture_format_version": "1.0",
+  "issue_count": 3,
+  "repository_source_url": "https://github.com/acme-internal/northwind-portal",
+  "selection_rules": "Entirely synthetic, hand-authored issues for Milestone 3.1 Slice 2 tenant/retrieval-isolation demonstration and testing -- not sourced from any real repository or real customer data.",
+  "source_provider": "synthetic",
+  "source_repository": "acme-internal/northwind-portal"
+}

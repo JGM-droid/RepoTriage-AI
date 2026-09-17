@@ -44,6 +44,8 @@ from app.api.v1.triage import get_triage_session
 from app.config import get_settings
 from app.main import app
 from app.models.core import (
+    DEFAULT_ORG_REVIEWER_ACTOR_ID,
+    DEFAULT_ORGANIZATION_ID,
     HumanDecision,
     Issue,
     Recommendation,
@@ -92,7 +94,10 @@ def client(database_session: Session) -> Iterator[TestClient]:
 
     app.dependency_overrides[get_triage_session] = override_session
     try:
-        yield TestClient(app)
+        # Reviewer role: exercises both state-changing endpoints (start
+        # triage, record a decision), which require reviewer/administrator
+        # (Milestone 3.1 Slice 2; see ADR 0014).
+        yield TestClient(app, headers={"X-Demo-Actor-ID": str(DEFAULT_ORG_REVIEWER_ACTOR_ID)})
     finally:
         app.dependency_overrides.clear()
         get_settings.cache_clear()
@@ -118,7 +123,9 @@ def openai_provider_configured(monkeypatch: pytest.MonkeyPatch) -> Iterator[None
 
 
 def add_repository(session: Session, *, name: str = "pallets/flask") -> Repository:
-    repository = Repository(name=name, source_url=f"https://github.com/{name}")
+    repository = Repository(
+        tenant_id=DEFAULT_ORGANIZATION_ID, name=name, source_url=f"https://github.com/{name}"
+    )
     session.add(repository)
     session.flush()
     return repository

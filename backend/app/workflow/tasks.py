@@ -1,15 +1,19 @@
 """Celery task and durable orchestration for the deterministic triage workflow.
 
-Executes classify -> retrieve_fixture_evidence -> assess -> propose ->
-retrieve_related_evidence -> ai_inference -> human_review in a background
-worker (Milestone 2.1; `ai_inference` added in Milestone 2.2, see ADR 0008;
-`retrieve_related_evidence` added in Milestone 2.3, see ADR 0009) instead
-of inside the HTTP request. `retrieve_related_evidence` looks up bounded,
-same-repository, resolved evidence (via pgvector) and hands only its
-selected top results to `ai_inference`; `ai_inference` supplements the
-deterministic classification, severity, and proposed action with an
-AI-generated narrative grounded in that evidence — neither stage ever
-changes classification/severity/proposed_action, and neither creates a
+Executes authorize -> classify -> retrieve_fixture_evidence -> assess ->
+propose -> authorize_before_retrieval -> retrieve_related_evidence ->
+authorize_before_ai_inference -> ai_inference -> human_review ->
+authorize_before_persistence in a background worker (Milestone 2.1;
+`ai_inference` added in Milestone 2.2, see ADR 0008;
+`retrieve_related_evidence` added in Milestone 2.3, see ADR 0009;
+`authorize` and its three re-authorization checkpoints added in Milestone
+3.1 Slice 2's correction, see ADR 0014) instead of inside the HTTP
+request. `retrieve_related_evidence` looks up bounded, same-repository,
+resolved evidence (via pgvector) and hands only its selected top results
+to `ai_inference`; `ai_inference` supplements the deterministic
+classification, severity, and proposed action with an AI-generated
+narrative grounded in that evidence — neither stage ever changes
+classification/severity/proposed_action, and neither creates a
 `HumanDecision`. PostgreSQL persists the workflow-run (`Analysis`) status,
 current stage, attempt count, and one `StageAttempt` row per stage attempt
 (including that stage's deterministic output), so a crashed or re-delivered
@@ -22,6 +26,36 @@ recommendation is never duplicated. A database-level unique constraint on
 stage per attempt" a hard invariant, not just an application convention. The
 worker never creates a `HumanDecision` (see ADR 0003); a completed run only
 ever produces a proposal awaiting explicit human review.
+
+Authorization is dynamic state, not a fact that stays true once observed
+-- so it is never treated as a resumable, cacheable stage result the way
+`classify`'s or `assess`'s deterministic output is. A single canonical
+guard function, `_authorize_workflow_run`, re-resolves the initiating
+actor and the full ownership chain from PostgreSQL and is called at
+**four** separate points in every attempt: once at the very start
+(`authorize`), and again immediately before each of the three
+tenant-sensitive actions that follow it -- `retrieve_related_evidence`
+(`authorize_before_retrieval`), `ai_inference`
+(`authorize_before_ai_inference`), and `Recommendation` persistence
+(`authorize_before_persistence`). Each checkpoint is its own distinctly
+-named stage, so even a same-attempt crash-and-resume (which reuses an
+earlier stage's cached "succeeded" output rather than recomputing it,
+exactly like every other stage) still forces the *next* checkpoint --
+whichever one this attempt has not yet executed -- to re-verify current
+state fresh; a previously successful `authorize` (or any later
+checkpoint) can never be used to wave through a later one. The Celery
+payload (`execute_triage_workflow`'s sole argument) is, and remains,
+just the analysis id: no tenant id, actor id, or role ever crosses into
+the task message. A checkpoint failure blocks every action after it --
+retrieval, AI inference, and recommendation creation -- exactly like any
+other stage failure, through the same bounded-retry/terminal-failure
+machinery, observable as an ordinary failed `StageAttempt` row. Note
+what this does *not* claim: there is no transactional protection across
+the external AI provider call itself (a real network call cannot be
+wrapped in a database transaction) -- which is exactly why authorization
+is checked again immediately *before* that call, and a fourth time
+immediately before its result is persisted, rather than assumed to still
+hold from an earlier check.
 """
 
 from __future__ import annotations
@@ -37,7 +71,17 @@ from app.ai_gateway.contracts import AIResponse
 from app.ai_gateway.stage import run_ai_inference_stage
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models.core import Analysis, AuditEvent, Issue, Recommendation, StageAttempt
+from app.models.core import (
+    ROLE_ADMINISTRATOR,
+    ROLE_REVIEWER,
+    Actor,
+    Analysis,
+    AuditEvent,
+    Issue,
+    Recommendation,
+    Repository,
+    StageAttempt,
+)
 from app.retrieval.contracts import RetrievalResult, RetrievedRecord
 from app.retrieval.stage import run_retrieve_related_evidence_stage
 from app.triage.rules import (
@@ -56,13 +100,27 @@ from app.triage.rules import (
 from app.workflow.celery_app import celery_app
 
 STAGE_ORDER = (
+    "authorize",
     "classify",
     "retrieve_fixture_evidence",
     "assess",
     "propose",
+    "authorize_before_retrieval",
     "retrieve_related_evidence",
+    "authorize_before_ai_inference",
     "ai_inference",
     "human_review",
+    "authorize_before_persistence",
+)
+# Every one of these calls the same canonical `_authorize_workflow_run`
+# guard (see that function's docstring) -- never a duplicated check.
+# Kept as their own set for `_serialize_stage_output`/
+# `_deserialize_stage_output`'s dispatch below.
+_AUTHORIZATION_STAGES = (
+    "authorize",
+    "authorize_before_retrieval",
+    "authorize_before_ai_inference",
+    "authorize_before_persistence",
 )
 TERMINAL_STATUSES = ("completed", "failed", "timed_out")
 _STATUS_EVENT_TYPE = "triage_status_transition"
@@ -76,12 +134,68 @@ class WorkflowRunNotFoundError(LookupError):
     """Raised when a workflow task references an unknown analysis id."""
 
 
+class WorkflowAuthorizationError(RuntimeError):
+    """Raised by the `authorize` stage when the worker's own durable
+    re-validation of the initiating actor and tenant-ownership chain
+    fails. Never a trust decision made from the Celery payload -- only
+    `analysis_id` ever crosses that boundary; everything checked here is
+    freshly re-resolved from PostgreSQL on every attempt. The message is
+    always a fixed, generic string (see `_authorize_workflow_run`): it
+    names no actor, organization, or content, so it is always safe to
+    persist as a `StageAttempt.error` value."""
+
+
 class _RetryableWorkflowError(RuntimeError):
     """Raised only to trigger a bounded Celery-level retry.
 
     By the time this is raised, PostgreSQL already reflects the
     `retrying` status and the failed stage attempt.
     """
+
+
+def _authorize_workflow_run(session: Session, analysis: Analysis, issue: Issue) -> None:
+    """The worker's own durable re-validation -- re-run on every attempt,
+    trusting nothing but `analysis.initiating_actor_id` and PostgreSQL.
+    Raises `WorkflowAuthorizationError` (a fixed, generic message, never
+    including actor/organization/content details) the moment any of the
+    following no longer holds:
+
+      1. an initiating actor reference was recorded at all;
+      2. that actor still exists;
+      3. that actor is still enabled;
+      4. that actor's role still permits initiating triage;
+      5. the issue's repository still exists (ownership-chain sanity);
+      6. that repository's organization still matches the actor's own.
+
+    Checked in this order so the first failing condition is what's
+    reported; all six are cheap, single-row lookups against already
+    -indexed columns."""
+    if analysis.initiating_actor_id is None:
+        raise WorkflowAuthorizationError(
+            "This analysis has no recorded initiating actor and cannot proceed."
+        )
+
+    actor = session.get(Actor, analysis.initiating_actor_id)
+    if actor is None or not actor.is_enabled:
+        raise WorkflowAuthorizationError(
+            "The initiating actor is unknown or disabled; cannot proceed."
+        )
+
+    if actor.role not in (ROLE_REVIEWER, ROLE_ADMINISTRATOR):
+        raise WorkflowAuthorizationError(
+            "The initiating actor's role no longer permits triage; cannot proceed."
+        )
+
+    repository = session.get(Repository, issue.repository_id)
+    if repository is None:
+        raise WorkflowAuthorizationError(
+            "This issue's repository is missing; ownership chain is inconsistent."
+        )
+
+    if repository.tenant_id != actor.organization_id:
+        raise WorkflowAuthorizationError(
+            "The initiating actor no longer belongs to this analysis's organization."
+        )
 
 
 def record_transition(
@@ -121,6 +235,8 @@ def _record_stage_attempt(
 
 
 def _serialize_stage_output(stage: str, result: object) -> str:
+    if stage in _AUTHORIZATION_STAGES:
+        return json.dumps(None)  # side-effect only: success means "no exception raised"
     if stage == "retrieve_fixture_evidence":
         return json.dumps([asdict(item) for item in result])
     return json.dumps(asdict(result))
@@ -128,6 +244,8 @@ def _serialize_stage_output(stage: str, result: object) -> str:
 
 def _deserialize_stage_output(stage: str, raw: str) -> object:
     data = json.loads(raw)
+    if stage in _AUTHORIZATION_STAGES:
+        return None
     if stage == "classify":
         return Classification(
             label=data["label"],
@@ -334,6 +452,16 @@ def process_workflow_run(session: Session, analysis_id: UUID) -> Analysis:
 
     attempt_number = analysis.attempt_count + 1
     try:
+        _run_stage(
+            session,
+            analysis,
+            "authorize",
+            attempt_number,
+            _authorize_workflow_run,
+            session,
+            analysis,
+            issue,
+        )
         classification = _run_stage(session, analysis, "classify", attempt_number, classify, issue)
         evidence = _run_stage(
             session,
@@ -361,6 +489,16 @@ def process_workflow_run(session: Session, analysis_id: UUID) -> Analysis:
             )
             is not None
         )
+        _run_stage(
+            session,
+            analysis,
+            "authorize_before_retrieval",
+            attempt_number,
+            _authorize_workflow_run,
+            session,
+            analysis,
+            issue,
+        )
         retrieval_result = _run_stage(
             session,
             analysis,
@@ -377,6 +515,16 @@ def process_workflow_run(session: Session, analysis_id: UUID) -> Analysis:
         ai_stage_already_succeeded = (
             _existing_succeeded_attempt(session, analysis, "ai_inference", attempt_number)
             is not None
+        )
+        _run_stage(
+            session,
+            analysis,
+            "authorize_before_ai_inference",
+            attempt_number,
+            _authorize_workflow_run,
+            session,
+            analysis,
+            issue,
         )
         ai_response = _run_stage(
             session,
@@ -395,6 +543,20 @@ def process_workflow_run(session: Session, analysis_id: UUID) -> Analysis:
             _record_ai_routing_event(session, issue, analysis, attempt_number, ai_response)
         review = _run_stage(
             session, analysis, "human_review", attempt_number, human_review, proposal
+        )
+        # Last checkpoint: re-verified immediately before the
+        # Recommendation is built and persisted below -- a permission
+        # change after retrieval/AI inference succeeded but before this
+        # point must still block persistence.
+        _run_stage(
+            session,
+            analysis,
+            "authorize_before_persistence",
+            attempt_number,
+            _authorize_workflow_run,
+            session,
+            analysis,
+            issue,
         )
     except SoftTimeLimitExceeded:
         analysis.attempt_count = attempt_number

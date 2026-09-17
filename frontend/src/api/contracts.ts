@@ -146,3 +146,22 @@ export type TriageStartedResponse = {
   status: TriageStatus;
   poll_url: string;
 };
+
+// Synthetic demo identity (Milestone 3.1 Slice 2; see ADR 0014).
+// X-Demo-Actor-ID is NOT production authentication -- these are
+// deterministic, unsigned demo identities used only to demonstrate
+// backend-enforced tenant isolation and role authorization.
+export type DemoActorRole = "viewer" | "reviewer" | "administrator";
+
+export type DemoActor = {
+  id: string;
+  organization_id: string;
+  organization_name: string;
+  display_name: string;
+  role: DemoActorRole;
+};
+
+export type DemoActorListResponse = {
+  actors: DemoActor[];
+  notice: string;
+};

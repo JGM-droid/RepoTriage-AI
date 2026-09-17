@@ -11,7 +11,14 @@ from app.decisions.service import (
     latest_decision_for_recommendation,
     record_decision,
 )
-from app.models.core import AuditEvent, HumanDecision, Issue, Recommendation, Repository
+from app.models.core import (
+    DEFAULT_ORGANIZATION_ID,
+    AuditEvent,
+    HumanDecision,
+    Issue,
+    Recommendation,
+    Repository,
+)
 from app.triage.service import run_triage
 
 TRUNCATE_CORE_TABLES = (
@@ -45,6 +52,7 @@ def add_triaged_issue(
     external_number: int = 1,
 ) -> tuple[Issue, Recommendation]:
     repository = Repository(
+        tenant_id=DEFAULT_ORGANIZATION_ID,
         name=f"pallets/flask-{external_number}",
         source_url=f"https://github.com/pallets/flask-{external_number}",
     )
@@ -80,7 +88,9 @@ def test_record_decision_approves_and_persists_a_human_decision(
 ) -> None:
     issue, recommendation = add_triaged_issue(database_session)
 
-    decision = record_decision(database_session, issue, recommendation, "approve")
+    decision = record_decision(
+        database_session, issue, recommendation, "approve", LOCAL_REVIEWER_ID
+    )
 
     assert decision.decision == "approve"
     assert decision.actor_id == LOCAL_REVIEWER_ID
@@ -93,7 +103,7 @@ def test_record_decision_rejects_and_persists_a_human_decision(
 ) -> None:
     issue, recommendation = add_triaged_issue(database_session)
 
-    decision = record_decision(database_session, issue, recommendation, "reject")
+    decision = record_decision(database_session, issue, recommendation, "reject", LOCAL_REVIEWER_ID)
 
     assert decision.decision == "reject"
     assert recommendation.status == "rejected"
@@ -104,7 +114,9 @@ def test_record_decision_request_revision_and_persists_a_human_decision(
 ) -> None:
     issue, recommendation = add_triaged_issue(database_session)
 
-    decision = record_decision(database_session, issue, recommendation, "request_revision")
+    decision = record_decision(
+        database_session, issue, recommendation, "request_revision", LOCAL_REVIEWER_ID
+    )
 
     assert decision.decision == "request_revision"
     assert recommendation.status == "revision_requested"
@@ -114,7 +126,7 @@ def test_record_decision_rejects_an_invalid_decision_value(database_session: Ses
     issue, recommendation = add_triaged_issue(database_session)
 
     with pytest.raises(DecisionValidationError) as excinfo:
-        record_decision(database_session, issue, recommendation, "close")
+        record_decision(database_session, issue, recommendation, "close", LOCAL_REVIEWER_ID)
 
     assert excinfo.value.error == "invalid_decision"
     assert database_session.query(HumanDecision).count() == 0
@@ -124,10 +136,10 @@ def test_record_decision_cannot_overwrite_an_existing_decision(
     database_session: Session,
 ) -> None:
     issue, recommendation = add_triaged_issue(database_session)
-    record_decision(database_session, issue, recommendation, "approve")
+    record_decision(database_session, issue, recommendation, "approve", LOCAL_REVIEWER_ID)
 
     with pytest.raises(DecisionValidationError) as excinfo:
-        record_decision(database_session, issue, recommendation, "reject")
+        record_decision(database_session, issue, recommendation, "reject", LOCAL_REVIEWER_ID)
 
     assert excinfo.value.error == "recommendation_not_proposed"
     assert recommendation.status == "approved"
@@ -138,7 +150,7 @@ def test_record_decision_cannot_overwrite_an_existing_decision(
 def test_record_decision_creates_an_audit_event(database_session: Session) -> None:
     issue, recommendation = add_triaged_issue(database_session)
 
-    record_decision(database_session, issue, recommendation, "approve")
+    record_decision(database_session, issue, recommendation, "approve", LOCAL_REVIEWER_ID)
 
     events = (
         database_session.query(AuditEvent)
@@ -155,7 +167,7 @@ def test_latest_decision_for_recommendation_returns_the_recorded_decision(
     database_session: Session,
 ) -> None:
     issue, recommendation = add_triaged_issue(database_session)
-    record_decision(database_session, issue, recommendation, "approve")
+    record_decision(database_session, issue, recommendation, "approve", LOCAL_REVIEWER_ID)
 
     decision = latest_decision_for_recommendation(database_session, recommendation.id)
 
@@ -173,7 +185,7 @@ def test_decision_on_one_issue_never_affects_an_unrelated_recommendation(
         database_session, title="Issue B", external_number=2
     )
 
-    record_decision(database_session, issue_b, recommendation_b, "approve")
+    record_decision(database_session, issue_b, recommendation_b, "approve", LOCAL_REVIEWER_ID)
 
     assert recommendation_a.status == "proposed"
     assert latest_decision_for_recommendation(database_session, recommendation_a.id) is None

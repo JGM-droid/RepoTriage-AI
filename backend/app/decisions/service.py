@@ -2,12 +2,17 @@
 
 Enforces the mandatory human-review boundary (see
 docs/adr/0003-mandatory-human-review-boundary.md): a recommendation stays
-`proposed` until an explicit local reviewer decision is recorded here.
+`proposed` until an explicit human reviewer decision is recorded here.
 Nothing in the triage workflow may call this module to auto-approve.
 
-This milestone has no authentication or RBAC (see ADR 0005, deferred to a
-later release). The single local reviewer is represented by a fixed,
-well-known identifier rather than a real user account.
+`actor_id` is required, not defaulted: the caller (the API layer, see
+`app.api.v1.triage`) must supply the real, backend-resolved actor id from
+`app.api.identity` -- Milestone 3.1 Slice 2 added synthetic demo
+identity/RBAC (see ADR 0014), so this module no longer silently attributes
+every decision to one fixed placeholder reviewer. `LOCAL_REVIEWER_ID` is
+kept only as the pre-Slice-2 fixed identifier (ADR 0005's original
+single-local-reviewer placeholder), still usable as an explicit actor id
+by tooling/tests with no real actor context of their own.
 """
 
 from __future__ import annotations
@@ -57,6 +62,7 @@ def record_decision(
     issue: Issue,
     recommendation: Recommendation,
     decision: str,
+    actor_id: UUID,
     rationale: str | None = None,
 ) -> HumanDecision:
     """Record an explicit human decision for a still-proposed recommendation.
@@ -64,6 +70,8 @@ def record_decision(
     Raises DecisionValidationError for an unsupported decision value or a
     recommendation that is no longer proposed (already decided), so a
     conflicting request can never silently overwrite the first decision.
+    `actor_id` is the real, backend-resolved actor recording this decision
+    (see `app.api.identity`) -- never a value the caller merely claims.
     """
     if decision not in ALLOWED_DECISIONS:
         raise DecisionValidationError(
@@ -79,7 +87,7 @@ def record_decision(
 
     human_decision = HumanDecision(
         recommendation_id=recommendation.id,
-        actor_id=LOCAL_REVIEWER_ID,
+        actor_id=actor_id,
         decision=decision,
         rationale=rationale,
     )
@@ -91,7 +99,7 @@ def record_decision(
         AuditEvent(
             repository_id=issue.repository_id,
             issue_id=issue.id,
-            actor_id=LOCAL_REVIEWER_ID,
+            actor_id=actor_id,
             event_type=DECISION_AUDIT_EVENT_TYPE,
             metadata_={
                 "recommendation_id": str(recommendation.id),

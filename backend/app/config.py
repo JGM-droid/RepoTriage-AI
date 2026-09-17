@@ -90,6 +90,15 @@ class Settings(BaseSettings):
     rate_limit_decision_max_requests: int = 20
     rate_limit_decision_window_seconds: int = 60
 
+    # Milestone 3.1 Slice 2 (see ADR 0014). Defaults False in every
+    # environment, including the live demo: the demo-actor listing
+    # endpoint (GET /api/v1/demo/actors) is registered only when this is
+    # explicitly true, so a fresh deployment never exposes it by accident.
+    # Setting this alone never changes what identity/authorization actually
+    # enforce -- it only controls whether the read-only actor-discovery
+    # convenience endpoint exists at all.
+    demo_mode_enabled: bool = False
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @model_validator(mode="after")

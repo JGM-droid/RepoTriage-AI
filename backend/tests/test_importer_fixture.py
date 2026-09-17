@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.importer.schemas import ImportIntegrityError, ImportValidationError
 from app.importer.service import DEFAULT_FIXTURE_DIR, import_fixture, load_fixture
-from app.models.core import Issue, Repository
+from app.models.core import DEFAULT_ORGANIZATION_ID, Issue, Repository
 
 TRUNCATE_CORE_TABLES = (
     "TRUNCATE audit_events, human_decisions, recommendations, "
@@ -170,7 +170,7 @@ def test_import_fixture_performs_no_network_call(
         issue_insert_result,
     ]
 
-    summary = import_fixture(session, fixture_dir=fixture_dir)
+    summary = import_fixture(session, fixture_dir=fixture_dir, tenant_id=DEFAULT_ORGANIZATION_ID)
 
     assert summary.inserted == 2
     session.commit.assert_called_once()
@@ -179,7 +179,7 @@ def test_import_fixture_performs_no_network_call(
 def test_committed_fixture_imports_successfully_into_postgresql(
     database_session: Session,
 ) -> None:
-    summary = import_fixture(database_session)
+    summary = import_fixture(database_session, tenant_id=DEFAULT_ORGANIZATION_ID)
 
     assert summary.inserted == 100
     assert len(database_session.execute(select(Issue)).scalars().all()) == 100
@@ -188,8 +188,12 @@ def test_committed_fixture_imports_successfully_into_postgresql(
 def test_import_fixture_is_idempotent(tmp_path: Path, database_session: Session) -> None:
     fixture_dir = _write_fixture(tmp_path, [_record(1), _record(2), _record(3)])
 
-    first = import_fixture(database_session, fixture_dir=fixture_dir)
-    second = import_fixture(database_session, fixture_dir=fixture_dir)
+    first = import_fixture(
+        database_session, fixture_dir=fixture_dir, tenant_id=DEFAULT_ORGANIZATION_ID
+    )
+    second = import_fixture(
+        database_session, fixture_dir=fixture_dir, tenant_id=DEFAULT_ORGANIZATION_ID
+    )
 
     assert first.inserted == 3
     assert second.inserted == 0

@@ -11,6 +11,11 @@ type IssueTriageProps = {
   onDecide: (decision: TriageDecision) => void;
   decisionSubmitting: boolean;
   decisionError: boolean;
+  // Milestone 3.1 Slice 2 (see ADR 0014): true only for reviewer/
+  // administrator actors. Hiding these controls for a viewer is a
+  // convenience, not the security boundary -- the backend independently
+  // rejects the same action with 403 regardless of what the UI shows.
+  canAct: boolean;
 };
 
 const DECISION_LABELS: Record<TriageDecision, string> = {
@@ -36,6 +41,7 @@ export function IssueTriage({
   onDecide,
   decisionSubmitting,
   decisionError,
+  canAct,
 }: IssueTriageProps) {
   return (
     <section aria-labelledby="issue-triage-title" className="issue-triage">
@@ -44,9 +50,13 @@ export function IssueTriage({
           <p className="eyebrow">Deterministic triage</p>
           <h3 id="issue-triage-title">Rule-based triage</h3>
         </div>
-        <button type="button" onClick={onRunTriage} disabled={isRunning}>
-          {isRunning ? "Running..." : "Run deterministic triage"}
-        </button>
+        {canAct ? (
+          <button type="button" onClick={onRunTriage} disabled={isRunning}>
+            {isRunning ? "Running..." : "Run deterministic triage"}
+          </button>
+        ) : (
+          <p className="viewer-notice">Viewers can browse triage results but cannot start triage.</p>
+        )}
       </div>
 
       {!hasRun && !isRunning && !error ? (
@@ -178,7 +188,7 @@ export function IssueTriage({
               reviewer records an explicit decision below.
             </p>
 
-            {result.human_review?.recommendation_status === "proposed" ? (
+            {result.human_review?.recommendation_status === "proposed" && canAct ? (
               <div className="decision-controls" role="group" aria-label="Record human decision">
                 <button
                   type="button"
@@ -202,6 +212,10 @@ export function IssueTriage({
                   {decisionSubmitting ? "Submitting..." : "Request revision"}
                 </button>
               </div>
+            ) : null}
+
+            {result.human_review?.recommendation_status === "proposed" && !canAct ? (
+              <p className="viewer-notice">Viewers can browse but cannot record a human decision.</p>
             ) : null}
 
             {decisionError ? (

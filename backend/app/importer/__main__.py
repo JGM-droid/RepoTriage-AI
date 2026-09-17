@@ -13,12 +13,17 @@ import sys
 from app.database import SessionLocal
 from app.importer.schemas import ImporterError
 from app.importer.service import import_fixture
+from app.models.core import DEFAULT_ORGANIZATION_ID
 
 
 def main() -> int:
     session = SessionLocal()
     try:
-        summary = import_fixture(session)
+        # The default demo organization (Milestone 3.1 Slice 2; see ADR
+        # 0014) -- this command has always imported the single shared demo
+        # repository, so it explicitly targets the same organization that
+        # owned it before tenant_id's server_default was removed.
+        summary = import_fixture(session, tenant_id=DEFAULT_ORGANIZATION_ID)
     except ImporterError as exc:
         print(f"Import failed: {exc}", file=sys.stderr)
         return 1

@@ -21,7 +21,13 @@ from app.api.rate_limit import _RATE_LIMIT_KEY_PREFIX
 from app.api.v1.triage import get_triage_session
 from app.config import Settings, get_settings
 from app.main import app
-from app.models.core import Analysis, Issue, Repository
+from app.models.core import (
+    DEFAULT_ORG_REVIEWER_ACTOR_ID,
+    DEFAULT_ORGANIZATION_ID,
+    Analysis,
+    Issue,
+    Repository,
+)
 
 TRUNCATE_CORE_TABLES = (
     "TRUNCATE audit_events, human_decisions, recommendations, "
@@ -72,7 +78,10 @@ def client(database_session: Session, redis_client: redis.Redis) -> Iterator[Tes
 
     app.dependency_overrides[get_triage_session] = override_session
     try:
-        yield TestClient(app)
+        # Reviewer role: this file exercises the two rate-limited,
+        # state-changing endpoints (start triage, record a decision),
+        # both of which require reviewer/administrator (see ADR 0014).
+        yield TestClient(app, headers={"X-Demo-Actor-ID": str(DEFAULT_ORG_REVIEWER_ACTOR_ID)})
     finally:
         app.dependency_overrides.clear()
         get_settings.cache_clear()
@@ -87,6 +96,7 @@ def add_issue(
     external_number: int = 1,
 ) -> Issue:
     repository = Repository(
+        tenant_id=DEFAULT_ORGANIZATION_ID,
         name=f"pallets/flask-{external_number}",
         source_url=f"https://github.com/pallets/flask-{external_number}",
     )

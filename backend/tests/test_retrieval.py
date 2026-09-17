@@ -17,7 +17,13 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-from app.models.core import Issue, Repository, RepositoryDocument, RetrievalChunk
+from app.models.core import (
+    DEFAULT_ORGANIZATION_ID,
+    Issue,
+    Repository,
+    RepositoryDocument,
+    RetrievalChunk,
+)
 from app.retrieval.chunking import chunk_text, content_hash
 from app.retrieval.contracts import RetrievalRequest
 from app.retrieval.embedding import EmbeddingDimensionMismatchError, FakeEmbeddingAdapter
@@ -55,7 +61,9 @@ def database_session() -> Iterator[Session]:
 def add_repository(
     session: Session, source_url: str = "https://github.com/pallets/flask"
 ) -> Repository:
-    repository = Repository(name="pallets/flask", source_url=source_url)
+    repository = Repository(
+        tenant_id=DEFAULT_ORGANIZATION_ID, name="pallets/flask", source_url=source_url
+    )
     session.add(repository)
     session.commit()
     return repository

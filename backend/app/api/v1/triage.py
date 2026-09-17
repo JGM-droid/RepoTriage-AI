@@ -1,5 +1,4 @@
 import json
-from collections.abc import Iterator
 from typing import Annotated
 from uuid import UUID
 
@@ -9,14 +8,22 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.api.identity import AuthenticatedActor, CurrentActor, require_role
 from app.api.rate_limit import rate_limiter
-from app.database import SessionLocal
+from app.api.scoping import get_issue_for_tenant
+from app.database import get_session
 from app.decisions.service import (
     DecisionValidationError,
     latest_decision_for_recommendation,
     record_decision,
 )
-from app.models.core import Analysis, Issue, Recommendation, StageAttempt
+from app.models.core import (
+    ROLE_ADMINISTRATOR,
+    ROLE_REVIEWER,
+    Analysis,
+    Recommendation,
+    StageAttempt,
+)
 from app.schemas.core import (
     ErrorResponse,
     TriageDecisionRequest,
@@ -34,12 +41,18 @@ from app.workflow.tasks import execute_triage_workflow, record_transition
 router = APIRouter(prefix="/issues", tags=["triage"])
 
 
-def get_triage_session() -> Iterator[Session]:
-    with SessionLocal() as session:
-        yield session
-
+# Alias, not a separate copy -- see app.api.v1.issues.get_issue_session's
+# comment: this makes identity resolution share the same overridable
+# session dependency as every route in this router.
+get_triage_session = get_session
 
 TriageSession = Annotated[Session, Depends(get_triage_session)]
+# Reviewer and administrator both get the same permissions in this slice
+# (see the role-policy table in ADR 0014) -- there is no meaningful
+# administrator-only action to gate separately yet.
+ReviewerOrAdministrator = Annotated[
+    AuthenticatedActor, Depends(require_role(ROLE_REVIEWER, ROLE_ADMINISTRATOR))
+]
 
 _start_triage_rate_limit = rate_limiter(
     "start_triage",
@@ -138,6 +151,7 @@ def _triage_result_from_analysis(session: Session, analysis: Analysis) -> Triage
 def start_issue_triage(
     issue_id: UUID,
     session: TriageSession,
+    actor: ReviewerOrAdministrator,
     request: TriageRequest = TriageRequest(),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> TriageStartedResponse | JSONResponse:
@@ -149,7 +163,7 @@ def start_issue_triage(
         )
 
     try:
-        issue = session.scalar(select(Issue).where(Issue.id == issue_id))
+        issue = get_issue_for_tenant(session, issue_id, actor.organization_id)
     except SQLAlchemyError:
         return _error_response(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -184,7 +198,12 @@ def start_issue_triage(
                 )
             return _workflow_started_response(existing)
 
-    analysis = Analysis(issue_id=issue_id, status="queued", idempotency_key=idempotency_key)
+    analysis = Analysis(
+        issue_id=issue_id,
+        status="queued",
+        idempotency_key=idempotency_key,
+        initiating_actor_id=actor.id,
+    )
     session.add(analysis)
     try:
         session.commit()
@@ -238,9 +257,11 @@ def _latest_analysis_for_issue(session: Session, issue_id: UUID) -> Analysis | N
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse},
     },
 )
-def get_issue_triage(issue_id: UUID, session: TriageSession) -> TriageResult | JSONResponse:
+def get_issue_triage(
+    issue_id: UUID, session: TriageSession, actor: CurrentActor
+) -> TriageResult | JSONResponse:
     try:
-        issue = session.scalar(select(Issue).where(Issue.id == issue_id))
+        issue = get_issue_for_tenant(session, issue_id, actor.organization_id)
     except SQLAlchemyError:
         return _error_response(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -290,9 +311,10 @@ def record_issue_triage_decision(
     issue_id: UUID,
     request: TriageDecisionRequest,
     session: TriageSession,
+    actor: ReviewerOrAdministrator,
 ) -> TriageResult | JSONResponse:
     try:
-        issue = session.scalar(select(Issue).where(Issue.id == issue_id))
+        issue = get_issue_for_tenant(session, issue_id, actor.organization_id)
     except SQLAlchemyError:
         return _error_response(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -325,7 +347,9 @@ def record_issue_triage_decision(
         )
 
     try:
-        record_decision(session, issue, recommendation, request.decision, request.rationale)
+        record_decision(
+            session, issue, recommendation, request.decision, actor.id, request.rationale
+        )
     except DecisionValidationError as exc:
         status_code = (
             status.HTTP_409_CONFLICT

@@ -6,15 +6,16 @@ record sets are used instead of the full 100-issue fixture.
 """
 
 import os
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, select, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.importer.schemas import ImportValidationError
 from app.importer.service import ImporterConfig, import_records
-from app.models.core import Issue, Repository
+from app.models.core import DEFAULT_ORGANIZATION_ID, Issue, Repository
 
 TRUNCATE_CORE_TABLES = (
     "TRUNCATE audit_events, human_decisions, recommendations, "
@@ -61,6 +62,7 @@ def test_import_records_creates_repository_and_issues(database_session: Session)
         repository_name=REPOSITORY_NAME,
         repository_source_url=REPOSITORY_SOURCE_URL,
         raw_records=records,
+        tenant_id=DEFAULT_ORGANIZATION_ID,
     )
 
     assert summary.considered == 3
@@ -78,12 +80,14 @@ def test_import_records_is_idempotent_on_repeat_import(database_session: Session
         repository_name=REPOSITORY_NAME,
         repository_source_url=REPOSITORY_SOURCE_URL,
         raw_records=records,
+        tenant_id=DEFAULT_ORGANIZATION_ID,
     )
     second_summary = import_records(
         database_session,
         repository_name=REPOSITORY_NAME,
         repository_source_url=REPOSITORY_SOURCE_URL,
         raw_records=records,
+        tenant_id=DEFAULT_ORGANIZATION_ID,
     )
 
     assert second_summary.inserted == 0
@@ -103,6 +107,7 @@ def test_import_records_enforces_configured_issue_limit(database_session: Sessio
         repository_name=REPOSITORY_NAME,
         repository_source_url=REPOSITORY_SOURCE_URL,
         raw_records=records,
+        tenant_id=DEFAULT_ORGANIZATION_ID,
         config=config,
     )
 
@@ -122,6 +127,7 @@ def test_import_records_excludes_pull_request_shaped_records(database_session: S
         repository_name=REPOSITORY_NAME,
         repository_source_url=REPOSITORY_SOURCE_URL,
         raw_records=records,
+        tenant_id=DEFAULT_ORGANIZATION_ID,
     )
 
     assert summary.considered == 2
@@ -140,6 +146,7 @@ def test_import_records_rolls_back_when_a_record_is_malformed(database_session: 
             repository_name=REPOSITORY_NAME,
             repository_source_url=REPOSITORY_SOURCE_URL,
             raw_records=records,
+            tenant_id=DEFAULT_ORGANIZATION_ID,
         )
 
     assert database_session.execute(select(Repository)).scalars().all() == []
@@ -156,6 +163,7 @@ def test_import_records_sanitizes_control_characters_and_line_endings(
         repository_name=REPOSITORY_NAME,
         repository_source_url=REPOSITORY_SOURCE_URL,
         raw_records=records,
+        tenant_id=DEFAULT_ORGANIZATION_ID,
     )
 
     issue = database_session.execute(select(Issue)).scalar_one()
@@ -177,5 +185,48 @@ def test_import_records_fails_when_postgresql_is_unavailable() -> None:
                 repository_name=REPOSITORY_NAME,
                 repository_source_url=REPOSITORY_SOURCE_URL,
                 raw_records=[_record(1)],
+                tenant_id=DEFAULT_ORGANIZATION_ID,
             )
     engine.dispose()
+
+
+# --- explicit ownership (Milestone 3.1 Slice 2; see ADR 0014) -----------------
+
+
+def test_import_records_requires_an_explicit_tenant_id(database_session: Session) -> None:
+    """No default to silently fall back to -- a caller with no tenant
+    context fails before any database call is even made."""
+    with pytest.raises(TypeError):
+        import_records(
+            database_session,
+            repository_name=REPOSITORY_NAME,
+            repository_source_url=REPOSITORY_SOURCE_URL,
+            raw_records=[_record(1)],
+        )
+
+
+def test_import_records_rejects_an_unknown_organization(database_session: Session) -> None:
+    with pytest.raises(IntegrityError):
+        import_records(
+            database_session,
+            repository_name=REPOSITORY_NAME,
+            repository_source_url=REPOSITORY_SOURCE_URL,
+            raw_records=[_record(1)],
+            tenant_id=uuid4(),
+        )
+
+
+def test_import_records_with_a_valid_explicit_organization_succeeds(
+    database_session: Session,
+) -> None:
+    summary = import_records(
+        database_session,
+        repository_name=REPOSITORY_NAME,
+        repository_source_url=REPOSITORY_SOURCE_URL,
+        raw_records=[_record(1)],
+        tenant_id=DEFAULT_ORGANIZATION_ID,
+    )
+
+    assert summary.inserted == 1
+    repository = database_session.execute(select(Repository)).scalar_one()
+    assert repository.tenant_id == DEFAULT_ORGANIZATION_ID

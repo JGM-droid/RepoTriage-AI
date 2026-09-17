@@ -84,10 +84,19 @@ def prepare_records(
     return prepared
 
 
-def _get_or_create_repository(session: Session, *, name: str, source_url: str) -> Repository:
+def _get_or_create_repository(
+    session: Session, *, name: str, source_url: str, tenant_id: UUID
+) -> Repository:
+    # Milestone 3.1 Slice 2 (see ADR 0014): `tenant_id` is required, not
+    # defaulted -- the database's own NOT NULL constraint (the Slice 1
+    # server_default was removed by migration 20260918_0006) is the last
+    # line of defense, but every caller of this function now must already
+    # know which organization it's importing for. An unrecognized
+    # organization id fails closed here too: the foreign key raises
+    # `IntegrityError` before any row is visible to another session.
     stmt = (
         pg_insert(Repository)
-        .values(name=name, source_url=source_url)
+        .values(name=name, source_url=source_url, tenant_id=tenant_id)
         .on_conflict_do_nothing(index_elements=["source_url"])
     )
     session.execute(stmt)
@@ -102,19 +111,21 @@ def import_records(
     repository_name: str,
     repository_source_url: str,
     raw_records: Sequence[dict[str, Any]],
+    tenant_id: UUID,
     config: ImporterConfig = DEFAULT_CONFIG,
 ) -> ImportSummary:
     """Import a bounded set of raw issue records for one repository.
 
     Runs inside a single transaction: any failure rolls back the entire
     import, including repository creation, so no partial fixture is ever
-    left behind.
+    left behind. `tenant_id` is required (Milestone 3.1 Slice 2; see ADR
+    0014) -- there is no default organization a caller can fall back to.
     """
     records = prepare_records(raw_records, config)
 
     try:
         repository = _get_or_create_repository(
-            session, name=repository_name, source_url=repository_source_url
+            session, name=repository_name, source_url=repository_source_url, tenant_id=tenant_id
         )
         inserted = 0
         for record in records:
@@ -181,14 +192,18 @@ def load_fixture(fixture_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]
 def import_fixture(
     session: Session,
     fixture_dir: Path | None = None,
+    *,
+    tenant_id: UUID,
     config: ImporterConfig = DEFAULT_CONFIG,
 ) -> ImportSummary:
-    """Import the committed offline fixture. Performs no network call."""
+    """Import a committed offline fixture. Performs no network call.
+    `tenant_id` is required (Milestone 3.1 Slice 2; see ADR 0014)."""
     manifest, raw_records = load_fixture(fixture_dir or DEFAULT_FIXTURE_DIR)
     return import_records(
         session,
         repository_name=manifest["source_repository"],
         repository_source_url=manifest["repository_source_url"],
         raw_records=raw_records,
+        tenant_id=tenant_id,
         config=config,
     )

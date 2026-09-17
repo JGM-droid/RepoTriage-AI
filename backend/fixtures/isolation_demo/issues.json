@@ -1,0 +1,26 @@
+[
+  {
+    "body": "Synthetic demo data for Milestone 3.1 Slice 2 tenant-isolation testing (see ADR 0014) -- not a real customer report.\n\n```python\n@app.route(\"/reports/<int:report_id>\")\ndef view_report(report_id):\n    report = Report.query.get(report_id)\n    return render_template(\"report.html\", report=report)\n```\n\nWhen report_id does not exist, this raises an unhandled AttributeError instead of returning a 404. Expected a clean not-found response.",
+    "external_number": 1,
+    "is_pull_request": false,
+    "source_url": "https://github.com/acme-internal/northwind-portal/issues/1",
+    "state": "closed",
+    "title": "Unhandled error when viewing a missing report"
+  },
+  {
+    "body": "Synthetic demo data for Milestone 3.1 Slice 2 tenant-isolation testing (see ADR 0014) -- not a real customer report.\n\nThe session cookie is not marked Secure in the deployed configuration, so it can be sent over an unencrypted connection. Should default to Secure/HttpOnly in production.",
+    "external_number": 2,
+    "is_pull_request": false,
+    "source_url": "https://github.com/acme-internal/northwind-portal/issues/2",
+    "state": "closed",
+    "title": "Session cookie missing Secure flag"
+  },
+  {
+    "body": "Synthetic demo data for Milestone 3.1 Slice 2 tenant-isolation testing (see ADR 0014) -- not a real customer report.\n\nThe nightly export job writes its output file before acquiring the file lock, so a concurrent run can read a half-written file. Lock acquisition should happen first.",
+    "external_number": 3,
+    "is_pull_request": false,
+    "source_url": "https://github.com/acme-internal/northwind-portal/issues/3",
+    "state": "closed",
+    "title": "Export job race condition on the output file"
+  }
+]

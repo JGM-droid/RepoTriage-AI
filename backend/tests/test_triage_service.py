@@ -7,7 +7,14 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 import app.triage.service as triage_service
-from app.models.core import AuditEvent, HumanDecision, Issue, Recommendation, Repository
+from app.models.core import (
+    DEFAULT_ORGANIZATION_ID,
+    AuditEvent,
+    HumanDecision,
+    Issue,
+    Recommendation,
+    Repository,
+)
 from app.triage.service import (
     TriageStageError,
     execute_triage,
@@ -45,7 +52,11 @@ def add_issue(
     body: str = "Traceback attached below",
     state: str = "open",
 ) -> Issue:
-    repository = Repository(name="pallets/flask", source_url="https://github.com/pallets/flask")
+    repository = Repository(
+        tenant_id=DEFAULT_ORGANIZATION_ID,
+        name="pallets/flask",
+        source_url="https://github.com/pallets/flask",
+    )
     session.add(repository)
     session.flush()
     issue = Issue(

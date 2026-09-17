@@ -2,6 +2,7 @@ from uuid import UUID
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     ForeignKey,
     Integer,
@@ -34,6 +35,29 @@ EMBEDDING_DIMENSION = 384
 DEFAULT_ORGANIZATION_ID = UUID("00000000-0000-0000-0000-000000000101")
 ISOLATION_DEMO_ORGANIZATION_ID = UUID("00000000-0000-0000-0000-000000000102")
 
+# Milestone 3.1 Slice 2 (see ADR 0014): a constrained, closed role set.
+# `viewer` may only read its own organization's data; `reviewer` and
+# `administrator` may additionally start triage and record a human
+# decision (see the role-policy table in ADR 0014) -- this slice has no
+# administrator-only capability distinct from `reviewer`, since no
+# meaningful one exists yet.
+ROLE_VIEWER = "viewer"
+ROLE_REVIEWER = "reviewer"
+ROLE_ADMINISTRATOR = "administrator"
+ACTOR_ROLES = (ROLE_VIEWER, ROLE_REVIEWER, ROLE_ADMINISTRATOR)
+
+# Deterministic, well-known actor ids (never randomly generated -- same
+# rationale as the organization ids above): five demo actors seeded by
+# migration 20260918_0006, three in the default organization (one per
+# role) and two in the isolation-demo organization (viewer and
+# administrator only -- enough to prove cross-tenant denial without a
+# third role that adds no new isolation coverage).
+DEFAULT_ORG_VIEWER_ACTOR_ID = UUID("00000000-0000-0000-0000-000000000201")
+DEFAULT_ORG_REVIEWER_ACTOR_ID = UUID("00000000-0000-0000-0000-000000000202")
+DEFAULT_ORG_ADMINISTRATOR_ACTOR_ID = UUID("00000000-0000-0000-0000-000000000203")
+ISOLATION_ORG_VIEWER_ACTOR_ID = UUID("00000000-0000-0000-0000-000000000204")
+ISOLATION_ORG_ADMINISTRATOR_ACTOR_ID = UUID("00000000-0000-0000-0000-000000000205")
+
 
 class Organization(UUIDTimestampMixin, Base):
     """The tenant boundary every other row ultimately scopes to via
@@ -47,6 +71,36 @@ class Organization(UUIDTimestampMixin, Base):
     slug: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     repositories: Mapped[list["Repository"]] = relationship(back_populates="organization")
+    actors: Mapped[list["Actor"]] = relationship(back_populates="organization")
+
+
+class Actor(UUIDTimestampMixin, Base):
+    """A synthetic demo identity (Milestone 3.1 Slice 2; see ADR 0014) --
+    NOT a production user account. There is no password, session, token,
+    or any credential here: `X-Demo-Actor-ID` names this row directly, and
+    the server trusts the database, never the request, for organization
+    and role. Deliberately minimal: no email, no login history, no
+    invitations -- nothing a real identity provider would own instead.
+    """
+
+    __tablename__ = "actors"
+    __table_args__ = (
+        CheckConstraint(
+            f"role IN ('{ROLE_VIEWER}', '{ROLE_REVIEWER}', '{ROLE_ADMINISTRATOR}')",
+            name="ck_actors_role",
+        ),
+    )
+
+    organization_id: Mapped[UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    slug: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    is_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    organization: Mapped["Organization"] = relationship(back_populates="actors")
 
 
 class Repository(UUIDTimestampMixin, Base):
@@ -56,14 +110,17 @@ class Repository(UUIDTimestampMixin, Base):
     # foreign key (was a bare, unenforced nullable UUID reserved by ADR
     # 0005). RESTRICT, not CASCADE, on delete: an organization can never be
     # removed while it still owns repositories -- and therefore issues,
-    # analyses, and every other downstream record -- see ADR 0013.
-    # `server_default` assigns any repository created without an explicit
-    # organization to the deterministic default org, so the existing
-    # importer and every existing test construct valid rows unchanged.
+    # analyses, and every other downstream record -- see ADR 0013. Slice 1
+    # gave this column a temporary `server_default` (the deterministic
+    # default org) so the pre-Slice-2 importer, with no concept of "which
+    # organization is this for", could still construct valid rows. Slice 2
+    # (ADR 0014) removes that default: migration 20260918_0006 drops it at
+    # the database level, and every repository-creation path now passes an
+    # explicit `tenant_id` -- a caller with no tenant context fails closed
+    # (NOT NULL violation) instead of silently landing in the default org.
     tenant_id: Mapped[UUID] = mapped_column(
         ForeignKey("organizations.id", ondelete="RESTRICT"),
         nullable=False,
-        server_default=text(f"'{DEFAULT_ORGANIZATION_ID}'::uuid"),
         index=True,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -100,6 +157,17 @@ class Analysis(UUIDTimestampMixin, Base):
     current_stage: Mapped[str | None] = mapped_column(String(64))
     attempt_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
+    )
+    # Milestone 3.1 Slice 2 correction (see ADR 0014): the durable,
+    # immutable record of which actor initiated this analysis. Nullable
+    # -- not every Analysis-creation path in this codebase goes through
+    # the authenticated API (some tests and tooling construct one
+    # directly) -- but the worker's own `authorize` stage treats a
+    # missing reference as a hard failure, not a silent default. RESTRICT
+    # (not CASCADE/SET NULL): an actor can never be deleted while it
+    # still has this durable audit trail pointing at it.
+    initiating_actor_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("actors.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     issue: Mapped["Issue"] = relationship(back_populates="analyses")
     recommendations: Mapped[list["Recommendation"]] = relationship(back_populates="analysis")

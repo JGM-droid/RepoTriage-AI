@@ -6,6 +6,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.core import DEFAULT_ORGANIZATION_ID
+
 TRUNCATE_CORE_TABLES = (
     "TRUNCATE audit_events, human_decisions, recommendations, "
     "analyses, issues, repositories CASCADE"
@@ -37,9 +39,13 @@ def database_session() -> Session:
 def insert_repository(session: Session) -> str:
     repository_id = uuid4()
     session.execute(
-        text("INSERT INTO repositories (id, name, source_url) VALUES (:id, :name, :url)"),
+        text(
+            "INSERT INTO repositories (id, tenant_id, name, source_url) "
+            "VALUES (:id, :tenant_id, :name, :url)"
+        ),
         {
             "id": repository_id,
+            "tenant_id": DEFAULT_ORGANIZATION_ID,
             "name": "example",
             "url": f"https://github.com/example/{repository_id}",
         },

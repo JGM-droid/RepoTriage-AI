@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.api.v1.issues import get_issue_session
 from app.main import app
-from app.models.core import Issue, Repository
+from app.models.core import DEFAULT_ORG_VIEWER_ACTOR_ID, DEFAULT_ORGANIZATION_ID, Issue, Repository
 
 TRUNCATE_CORE_TABLES = (
     "TRUNCATE audit_events, human_decisions, recommendations, "
@@ -42,7 +42,9 @@ def client(database_session: Session) -> Iterator[TestClient]:
 
     app.dependency_overrides[get_issue_session] = override_session
     try:
-        yield TestClient(app)
+        # Viewer role: every endpoint this file exercises is read-only
+        # (Milestone 3.1 Slice 2; see ADR 0014).
+        yield TestClient(app, headers={"X-Demo-Actor-ID": str(DEFAULT_ORG_VIEWER_ACTOR_ID)})
     finally:
         app.dependency_overrides.clear()
 
@@ -56,6 +58,7 @@ def add_issue(
 ) -> Issue:
     if repository is None:
         repository = Repository(
+            tenant_id=DEFAULT_ORGANIZATION_ID,
             name="pallets/flask",
             source_url="https://github.com/pallets/flask",
         )
@@ -80,6 +83,7 @@ def test_list_issues_returns_imported_issues_in_deterministic_order(
     database_session: Session,
 ) -> None:
     repository = Repository(
+        tenant_id=DEFAULT_ORGANIZATION_ID,
         name="pallets/flask",
         source_url="https://github.com/pallets/flask",
     )
@@ -127,7 +131,20 @@ def test_get_issue_returns_stable_not_found_response(client: TestClient) -> None
 
 
 def test_list_issues_returns_stable_database_error() -> None:
+    class _StubActor:
+        id = DEFAULT_ORG_VIEWER_ACTOR_ID
+        organization_id = DEFAULT_ORGANIZATION_ID
+        role = "viewer"
+        display_name = "Stub Viewer"
+        is_enabled = True
+
     class BrokenSession:
+        def get(self, _model: object, _id: object) -> _StubActor:
+            # Identity resolution must succeed so this test proves what it
+            # says it proves -- the issue list query itself failing -- not
+            # an unrelated identity-resolution error.
+            return _StubActor()
+
         def execute(self, _statement: object) -> object:
             raise SQLAlchemyError("database unavailable")
 
@@ -136,7 +153,9 @@ def test_list_issues_returns_stable_database_error() -> None:
 
     app.dependency_overrides[get_issue_session] = override_session
     try:
-        response = TestClient(app).get("/api/v1/issues")
+        response = TestClient(
+            app, headers={"X-Demo-Actor-ID": str(DEFAULT_ORG_VIEWER_ACTOR_ID)}
+        ).get("/api/v1/issues")
     finally:
         app.dependency_overrides.clear()
 

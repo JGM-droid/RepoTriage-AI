@@ -9,7 +9,14 @@ from sqlalchemy.orm import Session
 
 from app.api.v1.triage import get_triage_session
 from app.main import app
-from app.models.core import AuditEvent, HumanDecision, Issue, Repository
+from app.models.core import (
+    DEFAULT_ORG_REVIEWER_ACTOR_ID,
+    DEFAULT_ORGANIZATION_ID,
+    AuditEvent,
+    HumanDecision,
+    Issue,
+    Repository,
+)
 
 TRUNCATE_CORE_TABLES = (
     "TRUNCATE audit_events, human_decisions, recommendations, "
@@ -40,7 +47,10 @@ def client(database_session: Session) -> Iterator[TestClient]:
 
     app.dependency_overrides[get_triage_session] = override_session
     try:
-        yield TestClient(app)
+        # Reviewer role: this file starts triage and records decisions,
+        # both of which require reviewer/administrator (Milestone 3.1
+        # Slice 2; see ADR 0014).
+        yield TestClient(app, headers={"X-Demo-Actor-ID": str(DEFAULT_ORG_REVIEWER_ACTOR_ID)})
     finally:
         app.dependency_overrides.clear()
 
@@ -54,6 +64,7 @@ def add_issue(
     external_number: int = 1,
 ) -> Issue:
     repository = Repository(
+        tenant_id=DEFAULT_ORGANIZATION_ID,
         name=f"pallets/flask-{external_number}",
         source_url=f"https://github.com/pallets/flask-{external_number}",
     )

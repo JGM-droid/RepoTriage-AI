@@ -1,14 +1,14 @@
-from collections.abc import Iterator
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 
-from app.database import SessionLocal
+from app.api.identity import CurrentActor
+from app.api.scoping import get_issue_for_tenant, issues_query_for_tenant
+from app.database import get_session
 from app.models.core import Issue, Repository
 from app.schemas.core import (
     ErrorResponse,
@@ -20,11 +20,11 @@ from app.schemas.core import (
 
 router = APIRouter(prefix="/issues", tags=["issues"])
 
-
-def get_issue_session() -> Iterator[Session]:
-    with SessionLocal() as session:
-        yield session
-
+# Alias, not a separate copy: `app.api.identity`'s actor-resolution
+# dependency also depends on `app.database.get_session` directly, so
+# overriding this one dependency (the existing test pattern) transparently
+# covers identity resolution too -- see `get_session`'s docstring.
+get_issue_session = get_session
 
 IssueSession = Annotated[Session, Depends(get_issue_session)]
 
@@ -67,12 +67,11 @@ def _issue_detail(issue: Issue) -> IssueDetail:
     response_model=IssueListResponse,
     responses={status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse}},
 )
-def list_issues(session: IssueSession) -> IssueListResponse | JSONResponse:
+def list_issues(session: IssueSession, actor: CurrentActor) -> IssueListResponse | JSONResponse:
     try:
         issues = (
             session.execute(
-                select(Issue)
-                .join(Issue.repository)
+                issues_query_for_tenant(actor.organization_id)
                 .options(joinedload(Issue.repository))
                 .order_by(Repository.name, Issue.external_number, Issue.id)
             )
@@ -97,11 +96,17 @@ def list_issues(session: IssueSession) -> IssueListResponse | JSONResponse:
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse},
     },
 )
-def get_issue(issue_id: UUID, session: IssueSession) -> IssueDetail | JSONResponse:
+def get_issue(
+    issue_id: UUID, session: IssueSession, actor: CurrentActor
+) -> IssueDetail | JSONResponse:
+    # A cross-tenant issue id and a genuinely unknown one are
+    # indistinguishable here on purpose (see ADR 0014): both come back as
+    # `None` from a tenant-scoped lookup and both produce the exact same
+    # 404 below, so a valid actor can never use this endpoint to learn
+    # that another organization's issue id merely exists but is
+    # forbidden.
     try:
-        issue = session.scalar(
-            select(Issue).options(joinedload(Issue.repository)).where(Issue.id == issue_id)
-        )
+        issue = get_issue_for_tenant(session, issue_id, actor.organization_id)
     except SQLAlchemyError:
         return _error_response(
             status.HTTP_500_INTERNAL_SERVER_ERROR,

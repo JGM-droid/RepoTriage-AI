@@ -21,6 +21,7 @@ from app.api.v1.issues import get_issue_session
 from app.api.v1.triage import get_triage_session
 from app.importer.service import import_fixture
 from app.main import app
+from app.models.core import DEFAULT_ORG_REVIEWER_ACTOR_ID, DEFAULT_ORGANIZATION_ID
 
 TRUNCATE_CORE_TABLES = (
     "TRUNCATE audit_events, human_decisions, recommendations, "
@@ -52,7 +53,7 @@ def client(database_session: Session) -> Iterator[TestClient]:
     app.dependency_overrides[get_issue_session] = override_session
     app.dependency_overrides[get_triage_session] = override_session
     try:
-        yield TestClient(app)
+        yield TestClient(app, headers={"X-Demo-Actor-ID": str(DEFAULT_ORG_REVIEWER_ACTOR_ID)})
     finally:
         app.dependency_overrides.clear()
 
@@ -61,7 +62,7 @@ def test_release_1_workflow_completes_end_to_end_without_a_paid_provider(
     client: TestClient, database_session: Session
 ) -> None:
     # Import: offline, bounded, committed fixture; no network call.
-    summary = import_fixture(database_session)
+    summary = import_fixture(database_session, tenant_id=DEFAULT_ORGANIZATION_ID)
     assert summary.considered == 100
     assert summary.inserted == 100
 

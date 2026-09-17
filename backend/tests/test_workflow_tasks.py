@@ -21,6 +21,8 @@ from app.ai_gateway.contracts import STATUS_FALLBACK, AIRequest, AIResponse
 from app.ai_gateway.prompts import render_active_prompt
 from app.ai_gateway.stage import run_ai_inference_stage
 from app.models.core import (
+    DEFAULT_ORG_REVIEWER_ACTOR_ID,
+    DEFAULT_ORGANIZATION_ID,
     Analysis,
     AuditEvent,
     HumanDecision,
@@ -63,7 +65,11 @@ def add_issue(
     body: str = "Traceback attached below",
     state: str = "open",
 ) -> Issue:
-    repository = Repository(name="pallets/flask", source_url="https://github.com/pallets/flask")
+    repository = Repository(
+        tenant_id=DEFAULT_ORGANIZATION_ID,
+        name="pallets/flask",
+        source_url="https://github.com/pallets/flask",
+    )
     session.add(repository)
     session.flush()
     issue = Issue(
@@ -80,7 +86,14 @@ def add_issue(
 
 
 def start_analysis(session: Session, issue: Issue) -> Analysis:
-    analysis = Analysis(issue_id=issue.id, status="queued")
+    # A valid initiating actor reference is required for the workflow's
+    # own `authorize` stage to pass (Milestone 3.1 Slice 2 correction;
+    # see ADR 0014) -- this file's whole point is exercising the real
+    # workflow's retry/resume/timeout behavior, so it must authorize
+    # successfully just like a real API-initiated run would.
+    analysis = Analysis(
+        issue_id=issue.id, status="queued", initiating_actor_id=DEFAULT_ORG_REVIEWER_ACTOR_ID
+    )
     session.add(analysis)
     session.commit()
     session.refresh(analysis)
@@ -261,7 +274,10 @@ def test_a_crash_after_a_middle_stage_succeeds_resumes_without_rerunning_it(
 
     # 3. execution resumes at the next incomplete stage.
     assert result.status == "completed"
-    assert result.current_stage == "human_review"
+    # The last stage set before persistence is now the final
+    # reauthorization checkpoint (Milestone 3.1 Slice 2 correction; see
+    # ADR 0014), not `human_review` itself.
+    assert result.current_stage == "authorize_before_persistence"
 
     # 1 & 2. earlier stages were not re-executed and no stage has more than
     # one attempt row for this attempt number.

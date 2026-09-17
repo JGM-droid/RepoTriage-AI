@@ -116,11 +116,24 @@ def _recreate_database(database_url: str, database_name: str) -> None:
         engine.dispose()
 
 
+# This file tests migration 20260917_0005 in isolation. Since later
+# migrations (20260918_0006 and beyond) now exist above it, "head" no
+# longer means "0005" -- every setup/mid-test operation in this file
+# pins explicitly to 0005 itself, so this file's downgrade/upgrade
+# exercises stay meaningful regardless of how many migrations come after
+# it. Only the fixture's own teardown restores the database to the real
+# `head`, so every other test file (which assumes the schema is fully
+# migrated) is never left looking at a stale, partially-downgraded one.
+_THIS_MIGRATION = "20260917_0005"
+
+
 @pytest.fixture()
 def migration_env(monkeypatch: pytest.MonkeyPatch):
-    """Yields (database_url, alembic_config). Ensures the schema starts
-    and ends this test at `head`, regardless of what the test itself
-    does to the schema version in between."""
+    """Yields (database_url, alembic_config). Starts this test pinned at
+    migration 20260917_0005 itself (not the database's real `head`, which
+    may be later) and always restores the real `head` afterward,
+    regardless of what the test itself does to the schema version in
+    between."""
     database_url = os.getenv("DATABASE_URL")
     if database_url is None:
         pytest.skip("PostgreSQL is required for migration 0005 tests.")
@@ -128,7 +141,14 @@ def migration_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("DATABASE_URL", database_url)
     get_settings.cache_clear()
     config = _alembic_config(database_url)
-    command.upgrade(config, "head")
+    # `command.upgrade` only ever walks forward -- given a target that is
+    # already behind the database's current revision (true here whenever
+    # a later migration, e.g. 20260918_0006, already exists above this
+    # one and the database starts at real `head`), it silently no-ops
+    # rather than downgrading. `command.downgrade` is the one that
+    # actually walks backward to a specific target from wherever the
+    # database currently is.
+    command.downgrade(config, _THIS_MIGRATION)
     try:
         yield database_url, config
     finally:
@@ -175,7 +195,7 @@ def test_clean_upgrade_from_an_empty_database_reaches_0005(
     monkeypatch.setenv("DATABASE_URL", empty_database_url)
     get_settings.cache_clear()
     try:
-        command.upgrade(empty_db_config, "head")
+        command.upgrade(empty_db_config, _THIS_MIGRATION)
     finally:
         monkeypatch.setenv("DATABASE_URL", base_database_url)
         get_settings.cache_clear()
@@ -236,7 +256,7 @@ def test_a_pre_0005_repository_with_null_tenant_id_backfills_on_upgrade(migratio
             ).scalar()
             assert null_tenant is None  # sanity: genuinely null before upgrade
 
-        command.upgrade(config, "head")
+        command.upgrade(config, _THIS_MIGRATION)
 
         with engine.connect() as connection:
             backfilled_tenant = connection.execute(
@@ -300,7 +320,7 @@ def test_downgrade_then_upgrade_restores_valid_ownership(migration_env) -> None:
             ).scalar()
             assert surviving_count == 1
 
-        command.upgrade(config, "head")
+        command.upgrade(config, _THIS_MIGRATION)
 
         with engine.connect() as connection:
             org_count = connection.execute(text("SELECT count(*) FROM organizations")).scalar()
@@ -476,12 +496,13 @@ def test_downgrade_refuses_when_an_extra_custom_organization_owns_a_repository(
 
 
 def test_normal_bootstrap_does_not_duplicate_organizations(migration_env) -> None:
-    """Running `upgrade head` again on an already-migrated database (the
-    same idempotent pattern the importer's fixture bootstrap already
-    relies on) must never create duplicate organization rows."""
+    """Running `upgrade` to 20260917_0005 again on an already-migrated
+    database (the same idempotent pattern the importer's fixture
+    bootstrap already relies on) must never create duplicate organization
+    rows."""
     database_url, config = migration_env
 
-    command.upgrade(config, "head")  # already at head; must be a no-op
+    command.upgrade(config, _THIS_MIGRATION)  # already there; must be a no-op
 
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:

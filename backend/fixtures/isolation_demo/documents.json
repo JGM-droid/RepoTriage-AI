@@ -1,0 +1,16 @@
+[
+  {
+    "path": "runbook#error-handling",
+    "title": "Runbook: Error Handling Conventions",
+    "source_url": "https://internal.example/runbook/error-handling",
+    "license_note": "Synthetic demo content -- not real documentation.",
+    "content": "Every view function that looks up a record by id should return a clean 404 response when the record is missing, never an unhandled exception. Prefer get_or_404-style helpers over a bare .get() followed by attribute access, which raises AttributeError on a missing row instead of failing cleanly."
+  },
+  {
+    "path": "runbook#session-security",
+    "title": "Runbook: Session Cookie Security",
+    "source_url": "https://internal.example/runbook/session-security",
+    "license_note": "Synthetic demo content -- not real documentation.",
+    "content": "Production session cookies must set Secure and HttpOnly. Secure prevents the cookie from being sent over plain HTTP; HttpOnly prevents client-side script from reading it. Both should be the default in the production configuration, not an opt-in flag."
+  }
+]

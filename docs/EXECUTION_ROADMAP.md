@@ -475,7 +475,7 @@ At the end of every work session, update the Current Project State below. Do not
 ## 11. Current Project State
 
 **Current release:** Release 3 — Enterprise hardening
-**Current milestone:** Milestone 3.1 — Multi-tenancy and roles (in progress — Slice 1 of 2 complete)
+**Current milestone:** Milestone 3.1 — Multi-tenancy and roles (in progress — Slice 1 of 2 complete; Slice 2 implemented, verified, and pushed, pending Jesse's ownership walkthrough)
 **Status:** Release 1 — Product foundation is complete. Milestones 2.1–2.5 are complete (Jesse
 approved all five): a provider-neutral AI gateway with deterministic fallback (ADR 0008);
 repository-grounded pgvector retrieval with a calibrated two-band confidence model, disclosed
@@ -631,14 +631,47 @@ before and after. Only the `api` and `worker` containers were rebuilt and recrea
 verified source; PostgreSQL, Redis, and the frontend were never touched. Jesse explicitly approved
 Slice 1 as complete and authorized the live migration.
 
-Slice 2 — request identity and backend-enforced tenant scoping (viewer/reviewer/administrator
-roles, API-level tenant filtering, and the cross-tenant negative-test suite covering records,
-vectors, analyses, and traces that Critical Gate G4 requires) — is next and has not been started.
+Slice 2 — request identity, role-based authorization, and backend-enforced tenant scoping — is
+implemented and pushed for Jesse's ownership verification; it is not yet Jesse-approved and
+Critical Gate G4 remains open. [ADR 0014](adr/0014-synthetic-identity-and-tenant-isolation.md)
+adds a synthetic demo-identity mechanism (`X-Demo-Actor-ID`, explicitly documented everywhere as
+not production authentication), a closed `viewer`/`reviewer`/`administrator` role set enforced by
+both a database `CHECK` constraint and `app.api.identity.require_role`, centralized tenant-scoping
+query helpers (`app.api.scoping`) joining back to `Repository.tenant_id` for every protected
+resource, a defense-in-depth `RetrievalTenantMismatchError` invariant inside the retrieval query
+itself, and migration `20260918_0006` (a new `actors` table, removal of `Repository.tenant_id`'s
+Slice 1 default, and `Analysis.initiating_actor_id`, the durable record of who initiated an
+analysis). The background workflow re-derives ownership from PostgreSQL rather than trusting
+anything in the Celery payload (which carries only an analysis id). A review of the initial
+implementation found that authorization was checked once at the start of a workflow attempt and
+then implicitly trusted for the rest of that attempt, including across a crash and resume — treating
+a security check as a cacheable stage result rather than dynamic state. This was corrected: the same
+canonical `_authorize_workflow_run` guard is now called at four points in every workflow attempt
+(`authorize`, `authorize_before_retrieval`, `authorize_before_ai_inference`,
+`authorize_before_persistence`), each its own named, resumable `StageAttempt`, so a disabled actor,
+a changed organization, or a role downgrade occurring mid-run — including immediately after a crash
+and resume — is caught at the next tenant-sensitive checkpoint rather than riding on an earlier
+success. This still does not, and is not claimed to, wrap the external AI provider call itself in a
+database transaction (no real network call can be); authorization is instead checked immediately
+before that call and again immediately before its result is persisted. Verified: full backend suite
+488/488 passed against fresh disposable PostgreSQL/Redis; frontend suite 28/28 passed; ruff
+format/lint clean; `git diff --check` clean; Compose configuration validated; secrets and
+generated-artifact scans clean. The live demo database was not touched by this slice: migration head
+remains `20260917_0005` (migration `20260918_0006` has not been applied live), 100 issues, 405
+retrieval chunks, all five services healthy, `AI_PROVIDER=mock`/`EMBEDDING_PROVIDER=local`, zero
+paid provider calls. Not yet claimed: universal security or transactional protection around the
+external AI call (see above); Critical Gate G4 satisfied against the live demo database; Jesse's
+ownership walkthrough; or Milestone 3.1 complete. Applying migration `20260918_0006` to the live
+demo database, seeding live actors, and closing G4 are explicitly deferred to a separate,
+Jesse-approved activation step.
 
 **Last approved decision:** Milestone 3.1 Slice 1 — organization/tenant data-model foundation
 (ADR 0013, migration `20260917_0005`) — approved complete by Jesse, including authorization to
 apply the migration to the live demo database.
-**Next action:** Begin Milestone 3.1 Slice 2 — request identity and backend-enforced tenant scoping.
+**Next action:** Jesse's ownership walkthrough of Milestone 3.1 Slice 2 (ADR 0014) — review of
+this pushed commit's CI result, then, if approved, a separate, explicitly-approved live activation
+step (apply migration `20260918_0006`, seed live actors) before Critical Gate G4 and Milestone 3.1
+can be closed.
 **Blockers:** None identified.
 
 **Ownership follow-up:** Review remaining technical ownership topics when their corresponding components are implemented.

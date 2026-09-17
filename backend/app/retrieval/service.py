@@ -30,6 +30,8 @@ candidates are never backfilled in to fill out the slate.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 import sqlalchemy as sa
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -47,6 +49,22 @@ from app.retrieval.query_terms import extract_discriminative_terms, has_sufficie
 STATUS_OK = "ok"
 STATUS_EMPTY = "empty"
 STATUS_INSUFFICIENT_QUERY = "insufficient_query"
+
+
+class RetrievalTenantMismatchError(RuntimeError):
+    """A production security invariant, not a debug aid: raised if a row
+    returned by the retrieval query above belongs to a repository other
+    than the one requested. Given the query's own `WHERE
+    RetrievalChunk.repository_id == request.repository_id` clause, this
+    can never actually happen in current code -- it exists to fail
+    loudly, immediately, and before any chunk reaches ranking, citation
+    construction, or the AI prompt, if a future edit to that query ever
+    weakens the filter. Deliberately not a bare `assert`: Python disables
+    assertions entirely under `-O`/`PYTHONOPTIMIZE`, which would silently
+    turn this check into a no-op; an explicit exception cannot be
+    disabled that way. The message never names the mismatched
+    repository, chunk, or content -- safe to log or persist as-is."""
+
 
 REASON_INSUFFICIENT_QUERY = "insufficient_query_content"
 REASON_NO_CANDIDATES = "no_same_repository_candidates"
@@ -102,6 +120,19 @@ def _relevance_explanation(
     )
 
 
+def _assert_chunks_belong_to_repository(rows, repository_id: UUID) -> None:
+    """The defense-in-depth invariant check itself, factored out so it is
+    directly unit-testable with a synthetic row list -- the real SQL
+    query can never be tricked into violating its own `WHERE` clause, so
+    proving this fires requires calling it directly with a fabricated
+    mismatch rather than the full query path."""
+    for chunk, _distance in rows:
+        if chunk.repository_id != repository_id:
+            raise RetrievalTenantMismatchError(
+                "retrieval query returned a chunk outside the requested repository"
+            )
+
+
 def _shared_discriminative_terms(query_text: str, candidate_text: str) -> frozenset[str]:
     query_terms = set(extract_discriminative_terms(query_text))
     if not query_terms:
@@ -154,6 +185,10 @@ def retrieve_related_evidence(
         )
     )
     rows = session.execute(stmt).all()
+    # Defense-in-depth (Milestone 3.1 Slice 2; see ADR 0014 and
+    # RetrievalTenantMismatchError's own docstring above). Raises before
+    # any chunk reaches ranking, citation construction, or the AI prompt.
+    _assert_chunks_belong_to_repository(rows, request.repository_id)
     query_summary = f"top-{request.max_results} match for: {request.query_text[:200]!r}"
 
     if not rows:
