@@ -1,6 +1,7 @@
 import json
 import os
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -18,6 +19,7 @@ from app.models.core import (
     Issue,
     Recommendation,
     Repository,
+    StageAttempt,
 )
 from app.triage.service import status_history
 
@@ -121,6 +123,13 @@ def test_polling_after_start_returns_the_completed_result_with_separated_section
 ) -> None:
     issue = add_issue(database_session)
     client.post(f"/api/v1/issues/{issue.id}/triage", json={})
+
+    collision_time = datetime(2026, 1, 1, tzinfo=UTC)
+    updated = database_session.query(StageAttempt).update(
+        {StageAttempt.created_at: collision_time}, synchronize_session=False
+    )
+    assert updated == len(workflow_tasks.STAGE_ORDER)
+    database_session.commit()
 
     response = client.get(f"/api/v1/issues/{issue.id}/triage")
 

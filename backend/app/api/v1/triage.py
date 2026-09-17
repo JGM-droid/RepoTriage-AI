@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, status
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -36,7 +36,7 @@ from app.schemas.core import (
 )
 from app.triage.rules import TRIAGE_RULESET_VERSION
 from app.triage.service import status_history
-from app.workflow.tasks import execute_triage_workflow, record_transition
+from app.workflow.tasks import STAGE_ORDER, execute_triage_workflow, record_transition
 
 router = APIRouter(prefix="/issues", tags=["triage"])
 
@@ -94,7 +94,16 @@ def _triage_result_from_analysis(session: Session, analysis: Analysis) -> Triage
     attempts = (
         session.query(StageAttempt)
         .filter(StageAttempt.analysis_id == analysis.id)
-        .order_by(StageAttempt.created_at, StageAttempt.id)
+        .order_by(
+            StageAttempt.attempt_number,
+            case(
+                {stage: position for position, stage in enumerate(STAGE_ORDER)},
+                value=StageAttempt.stage,
+                else_=len(STAGE_ORDER),
+            ),
+            StageAttempt.created_at,
+            StageAttempt.id,
+        )
         .all()
     )
 
