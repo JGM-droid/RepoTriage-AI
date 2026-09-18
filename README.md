@@ -6,7 +6,7 @@ RepoTriage AI addresses the repeated triage burden created by duplicate, incompl
 
 The planned workflow is `import → classify → retrieve evidence → assess → propose → human review → decision`. Planned capabilities include evidence-backed recommendations, human approval, provider-neutral AI routing, repository-grounded retrieval, evaluation, security guardrails, auditability, observability, and reproducible delivery.
 
-**Current status:** Release 3 — Enterprise hardening / Milestone 3.2 — Append-only auditability is next. Milestone 3.1 — Multi-tenancy and roles is complete and Jesse-approved; Release 3 remains in progress.
+**Current status:** Release 3 — Enterprise hardening / Milestone 3.3 — End-to-end observability is in progress. Implementation, local verification, and Jesse's ownership walkthrough are complete; explicit completion approval and GitHub CI proof remain pending.
 
 ## Local Setup
 
@@ -41,6 +41,13 @@ docker compose down
 ```
 
 The frontend is available at `http://localhost:5173`. The Compose stack uses frontend port 5173, API port 8000, and PostgreSQL internally; it does not publish PostgreSQL.
+
+Local operational inspection is available at `http://localhost:16686` (Jaeger traces) and
+`http://localhost:9090` (Prometheus metrics). The API and worker export asynchronously through the
+local OpenTelemetry Collector. Collector/export failure is fail-open for application behavior:
+telemetry may be lost and an export error may be logged, but triage, tenant enforcement,
+persistence, and human review continue. See the [observability runbook](docs/OBSERVABILITY_RUNBOOK.md)
+for exact trace/metric queries and a controlled failure procedure.
 
 ### Synthetic demo identity selector
 

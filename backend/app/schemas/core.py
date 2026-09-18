@@ -259,6 +259,7 @@ class TriageStageAttempt(BaseModel):
 
 class TriageResult(BaseModel):
     analysis_id: UUID
+    correlation_id: str | None = None
     issue_id: UUID
     status: str
     current_stage: str | None
@@ -278,6 +279,7 @@ class TriageResult(BaseModel):
 
 class TriageStartedResponse(BaseModel):
     analysis_id: UUID
+    correlation_id: str | None = None
     issue_id: UUID
     status: str
     poll_url: str

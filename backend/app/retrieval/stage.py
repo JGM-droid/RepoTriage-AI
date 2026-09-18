@@ -22,6 +22,7 @@ import re
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
+from app.observability import span
 from app.retrieval.contracts import RetrievalRequest, RetrievalResult
 from app.retrieval.embedding import EmbeddingDimensionMismatchError, build_embedding_adapter
 from app.retrieval.service import RetrievalTenantMismatchError, retrieve_related_evidence
@@ -101,17 +102,23 @@ def run_retrieve_related_evidence_stage(
         min_similarity=settings.retrieval_min_similarity,
         high_confidence_similarity=settings.retrieval_high_confidence_similarity,
     )
-    try:
-        return retrieve_related_evidence(session, request, adapter)
-    except (EmbeddingDimensionMismatchError, RetrievalTenantMismatchError):
-        raise
-    except Exception as exc:
-        return RetrievalResult(
-            items=(),
-            query_summary=f"retrieval failed for query: {request.query_text[:200]!r}",
-            candidates_considered=0,
-            total_excerpt_chars=0,
-            mechanism=f"pgvector-cosine:{adapter.model_name}",
-            status=STATUS_FAILED,
-            failure_reason=str(exc),
-        )
+    with span(
+        "retrieval.query", attributes={"retrieval.mechanism": "pgvector-cosine"}
+    ) as current_span:
+        try:
+            result = retrieve_related_evidence(session, request, adapter)
+            current_span.set_attribute("retrieval.status", result.status)
+            current_span.set_attribute("retrieval.selected_count", len(result.items))
+            return result
+        except (EmbeddingDimensionMismatchError, RetrievalTenantMismatchError):
+            raise
+        except Exception as exc:
+            return RetrievalResult(
+                items=(),
+                query_summary="retrieval failed",
+                candidates_considered=0,
+                total_excerpt_chars=0,
+                mechanism=f"pgvector-cosine:{adapter.model_name}",
+                status=STATUS_FAILED,
+                failure_reason=type(exc).__name__,
+            )

@@ -362,7 +362,8 @@ Capture imports, analyses, workflow transitions, routing decisions, approvals, r
 
 ### Milestone 3.3 — End-to-end observability
 
-**Status:** Next — implementation not started.
+**Status:** In progress — implementation, disposable verification, and Jesse's ownership
+walkthrough are complete; explicit completion approval and GitHub CI proof remain pending.
 
 - Correlation ID from frontend through API, workflow, retrieval, model call, cost, and audit event
 - OpenTelemetry spans and errors
@@ -479,7 +480,7 @@ At the end of every work session, update the Current Project State below. Do not
 ## 11. Current Project State
 
 **Current release:** Release 3 — Enterprise hardening
-**Current milestone:** Milestone 3.3 — End-to-end observability (next; implementation not started)
+**Current milestone:** Milestone 3.3 — End-to-end observability (in progress; approval and CI pending)
 **Status:** Release 1 — Product foundation is complete. Milestones 2.1–2.5 are complete (Jesse
 approved all five): a provider-neutral AI gateway with deterministic fallback (ADR 0008);
 repository-grounded pgvector retrieval with a calibrated two-band confidence model, disclosed
@@ -719,13 +720,39 @@ and worker images required rebuild/recreation because their running images preda
 0007; PostgreSQL, Redis, frontend, volumes, and live data were not reset or reseeded. Jesse
 approved this evidence and Milestone 3.2 as complete.
 
+Milestone 3.3 implementation, local verification, and Jesse's ownership walkthrough are complete,
+but the milestone remains in progress and Critical Gate G8 is not yet marked complete pending
+explicit approval and GitHub CI proof. [ADR 0016](adr/0016-open-telemetry-observability.md)
+adds one OpenTelemetry boundary with validated/generated `X-Correlation-ID`, nullable durable
+`Analysis.correlation_id`/W3C `traceparent` fields in migration `20260920_0008`, linked API/worker
+traces across retry and resume, bounded operational metrics, and JSON logs carrying correlation and
+trace context. The Celery payload remains analysis-id-only; the worker re-derives tenant ownership
+and reloads telemetry context from PostgreSQL. Compose adds a local Collector, Jaeger, and
+Prometheus. Export is asynchronous and fail-open: telemetry loss cannot change authorization,
+workflow, persistence, or the mandatory human-decision boundary. Telemetry excludes issue bodies,
+retrieved contents, prompts, provider payloads, credentials, sensitive headers, and exception
+messages; metric labels contain no raw identifiers.
+
+Final verification against fresh disposable PostgreSQL/Redis passed the complete backend suite
+507/507, including the corrected explicit-revision 0007 tests and migration 0008 coverage. Ruff
+format/lint, a clean upgrade through migration 0008, and the deterministic evaluation baseline
+passed. The frontend full suite passed 30/30, with ESLint and production build clean. Base and demo
+Compose configuration, `git diff --check`, and a Gitleaks scan of all modified/untracked commit
+candidates passed. The isolated ownership walkthrough connected one correlation ID across the API
+response, JSON logs, API-to-worker Jaeger trace, tenant-scoped append-only audit history, and
+Prometheus workflow/stage/retrieval/AI/token/cost metrics. With the disposable Collector stopped,
+a second analysis still completed and persisted its audit evidence; the Collector was restored and
+its Prometheus target returned healthy. The live demo remained read-only throughout at migration
+`20260919_0007`, with unchanged counts, five healthy services, `AI_PROVIDER=mock`,
+`EMBEDDING_PROVIDER=local`, and the verified pre-0007 backup still present outside the repository.
+
 The local Compose runtime credential still owns `audit_events` and is a PostgreSQL superuser:
 triggers protect ordinary application DML, not an owner/superuser with DDL access. A
 deployment-ready design must separate a migration-owner role from a restricted
 application-runtime role before claiming protection against a compromised runtime credential.
 This protection is neither universal nor cryptographic.
-**Next action:** Scope Milestone 3.3 — End-to-end observability against rubric §I and Critical Gate
-G8; implementation has not started.
+**Next action:** Review and commit the verified Milestone 3.3 changes, push them for GitHub CI, then
+request Jesse's explicit approval before marking Milestone 3.3 or G8 complete.
 **Blockers:** None identified.
 
 **Ownership follow-up:** Review remaining technical ownership topics when their corresponding components are implemented.

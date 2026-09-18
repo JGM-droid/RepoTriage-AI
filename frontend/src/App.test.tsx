@@ -793,6 +793,46 @@ describe("App", () => {
     expect(headerOf(issuesCall!)["X-Demo-Actor-ID"]).toBe(defaultOrgReviewerActor.id);
   });
 
+  it("generates one bounded correlation id and reuses the server value while polling", async () => {
+    const fetchMock = vi.mocked(fetch);
+    mockStandardMount(fetchMock);
+    fetchMock
+      .mockReturnValueOnce(jsonResponse(issueDetailResponse))
+      .mockReturnValueOnce(jsonResponse(noTriageYetResponse, 404))
+      .mockReturnValueOnce(
+        jsonResponse({ ...startedTriageResponse, correlation_id: "server-correlation" }, 202),
+      )
+      .mockReturnValueOnce(
+        jsonResponse({ ...completedTriageResponse, correlation_id: "server-correlation" }),
+      );
+
+    render(<App />);
+    fireEvent.click(await findIssueButton("CLI crashes on Windows"));
+    await screen.findByText("No deterministic triage has been run for this issue yet.");
+    fireEvent.click(screen.getByRole("button", { name: "Run deterministic triage" }));
+    await screen.findByText("This result is rule-based and has not been approved by a human.");
+
+    const startCall = fetchMock.mock.calls.find(
+      (call) =>
+        (call[0] as string).endsWith("/api/v1/issues/issue-1/triage") &&
+        (call[1] as RequestInit | undefined)?.method === "POST",
+    );
+    expect(startCall).toBeDefined();
+    expect(headerOf(startCall!)["X-Correlation-ID"]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+
+    const pollCall = [...fetchMock.mock.calls]
+      .reverse()
+      .find(
+        (call) =>
+          (call[0] as string).endsWith("/api/v1/issues/issue-1/triage") &&
+          (call[1] as RequestInit | undefined)?.method !== "POST",
+      );
+    expect(pollCall).toBeDefined();
+    expect(headerOf(pollCall!)["X-Correlation-ID"]).toBe("server-correlation");
+  });
+
   it("hides reviewer-only controls and shows a viewer notice for a viewer actor", async () => {
     mockStandardMount(vi.mocked(fetch));
 

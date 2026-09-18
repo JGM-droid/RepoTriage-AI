@@ -48,6 +48,7 @@ import json
 import sys
 from pathlib import Path
 
+from app.config import get_settings
 from app.evaluation.adversarial import (
     DEFAULT_ADVERSARIAL_FIXTURE_PATH,
     load_adversarial_fixture,
@@ -67,6 +68,7 @@ from app.evaluation.retrieval_policy import (
     run_all_retrieval_policy_cases,
 )
 from app.evaluation.runner import run_all
+from app.observability import configure_observability, record_evaluation
 
 DEFAULT_BASELINE_PATH = DEFAULT_FIXTURE_PATH.parent / "baseline.json"
 
@@ -79,7 +81,7 @@ def _write_baseline(path: Path, report_dict: dict) -> None:
     path.write_text(json.dumps(report_dict, indent=2, sort_keys=False) + "\n", encoding="utf-8")
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m app.evaluation",
         description=(
@@ -248,6 +250,14 @@ def main(argv: list[str] | None = None) -> int:
     print(format_human_summary(candidate, baseline=baseline, comparison=comparison))
 
     return 0 if comparison.passed else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    settings = get_settings()
+    configure_observability("repotriage-evaluation", settings.otel_exporter_otlp_endpoint)
+    result = _main(argv)
+    record_evaluation(result == 0)
+    return result
 
 
 if __name__ == "__main__":

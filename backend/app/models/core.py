@@ -169,6 +169,10 @@ class Analysis(UUIDTimestampMixin, Base):
     initiating_actor_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("actors.id", ondelete="RESTRICT"), nullable=True, index=True
     )
+    # Durable hand-off across the API/Celery/retry/resume boundary. Nullable
+    # preserves pre-Milestone-3.3 analyses without manufacturing provenance.
+    correlation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    traceparent: Mapped[str | None] = mapped_column(String(55), nullable=True)
     issue: Mapped["Issue"] = relationship(back_populates="analyses")
     recommendations: Mapped[list["Recommendation"]] = relationship(back_populates="analysis")
     stage_attempts: Mapped[list["StageAttempt"]] = relationship(back_populates="analysis")

@@ -99,6 +99,11 @@ class Settings(BaseSettings):
     # convenience endpoint exists at all.
     demo_mode_enabled: bool = False
 
+    # Milestone 3.3. Empty outside Compose means telemetry remains local/no-op;
+    # Compose sends OTLP/HTTP to the local collector. Export is asynchronous and
+    # deliberately fail-open if the collector is unavailable.
+    otel_exporter_otlp_endpoint: str | None = None
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @model_validator(mode="after")

@@ -61,6 +61,7 @@ hold from an earlier check.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict
 from uuid import UUID
 
@@ -81,6 +82,16 @@ from app.models.core import (
     Recommendation,
     Repository,
     StageAttempt,
+)
+from app.observability import (
+    correlation_context,
+    monotonic,
+    record_ai,
+    record_retrieval,
+    record_retry,
+    record_stage,
+    record_workflow,
+    span,
 )
 from app.retrieval.contracts import RetrievalResult, RetrievedRecord
 from app.retrieval.stage import run_retrieve_related_evidence_stage
@@ -128,6 +139,7 @@ _AI_ROUTING_EVENT_TYPE = "ai_inference_routing"
 _RETRIEVAL_EVENT_TYPE = "retrieval_evidence"
 
 settings = get_settings()
+logger = logging.getLogger("repotriage.workflow")
 
 
 class WorkflowRunNotFoundError(LookupError):
@@ -206,7 +218,11 @@ def record_transition(
             repository_id=issue.repository_id,
             issue_id=issue.id,
             event_type=_STATUS_EVENT_TYPE,
-            metadata_={"analysis_id": str(analysis.id), "status": transition_status},
+            metadata_={
+                "analysis_id": str(analysis.id),
+                "correlation_id": analysis.correlation_id,
+                "status": transition_status,
+            },
         )
     )
     session.commit()
@@ -303,23 +319,34 @@ def _run_stage(session, analysis, stage, attempt_number, func, *args):
 
     analysis.current_stage = stage
     session.commit()
-    try:
-        result = func(*args)
-    except SoftTimeLimitExceeded:
-        _record_stage_attempt(session, analysis, stage, attempt_number, "timed_out")
-        raise
-    except Exception as exc:
-        _record_stage_attempt(session, analysis, stage, attempt_number, "failed", error=str(exc))
-        raise
-    _record_stage_attempt(
-        session,
-        analysis,
-        stage,
-        attempt_number,
-        "succeeded",
-        output=_serialize_stage_output(stage, result),
-    )
-    return result
+    started = monotonic()
+    span_name = "authorization.workflow" if stage in _AUTHORIZATION_STAGES else "workflow.stage"
+    with span(
+        span_name,
+        attributes={"workflow.stage": stage, "workflow.attempt": attempt_number},
+    ):
+        try:
+            result = func(*args)
+        except SoftTimeLimitExceeded:
+            _record_stage_attempt(session, analysis, stage, attempt_number, "timed_out")
+            record_stage(stage, "timed_out", monotonic() - started)
+            raise
+        except Exception as exc:
+            _record_stage_attempt(
+                session, analysis, stage, attempt_number, "failed", error=str(exc)
+            )
+            record_stage(stage, "failed", monotonic() - started)
+            raise
+        _record_stage_attempt(
+            session,
+            analysis,
+            stage,
+            attempt_number,
+            "succeeded",
+            output=_serialize_stage_output(stage, result),
+        )
+        record_stage(stage, "succeeded", monotonic() - started)
+        return result
 
 
 def _serialize_content(
@@ -359,10 +386,15 @@ def _record_ai_routing_event(
             event_type=_AI_ROUTING_EVENT_TYPE,
             metadata_={
                 "analysis_id": str(analysis.id),
+                "correlation_id": analysis.correlation_id,
                 "attempt_number": attempt_number,
                 "provider": ai_response.provider,
                 "model": ai_response.model,
                 "status": ai_response.status,
+                "input_tokens": ai_response.input_tokens,
+                "output_tokens": ai_response.output_tokens,
+                "estimated_cost_usd": ai_response.estimated_cost_usd,
+                "latency_ms": ai_response.latency_ms,
                 "fallback_reason": ai_response.fallback_reason,
                 "prompt_id": ai_response.prompt_id,
                 "prompt_version": ai_response.prompt_version,
@@ -406,6 +438,7 @@ def _record_retrieval_event(
             event_type=_RETRIEVAL_EVENT_TYPE,
             metadata_={
                 "analysis_id": str(analysis.id),
+                "correlation_id": analysis.correlation_id,
                 "attempt_number": attempt_number,
                 "repository_id": str(issue.repository_id),
                 "mechanism": retrieval_result.mechanism,
@@ -421,7 +454,7 @@ def _record_retrieval_event(
     session.commit()
 
 
-def process_workflow_run(session: Session, analysis_id: UUID) -> Analysis:
+def _process_workflow_run(session: Session, analysis_id: UUID) -> Analysis:
     """Execute or safely resume one durable workflow run.
 
     Idempotent: calling this more than once for the same analysis never
@@ -511,6 +544,7 @@ def process_workflow_run(session: Session, analysis_id: UUID) -> Analysis:
         )
         if not retrieval_already_succeeded:
             _record_retrieval_event(session, issue, analysis, attempt_number, retrieval_result)
+            record_retrieval(retrieval_result.status, retrieval_result.mechanism.split(":", 1)[0])
 
         ai_stage_already_succeeded = (
             _existing_succeeded_attempt(session, analysis, "ai_inference", attempt_number)
@@ -541,6 +575,13 @@ def process_workflow_run(session: Session, analysis_id: UUID) -> Analysis:
         )
         if not ai_stage_already_succeeded:
             _record_ai_routing_event(session, issue, analysis, attempt_number, ai_response)
+            record_ai(
+                ai_response.provider,
+                ai_response.status,
+                ai_response.input_tokens,
+                ai_response.output_tokens,
+                ai_response.estimated_cost_usd,
+            )
         review = _run_stage(
             session, analysis, "human_review", attempt_number, human_review, proposal
         )
@@ -574,23 +615,53 @@ def process_workflow_run(session: Session, analysis_id: UUID) -> Analysis:
         analysis.status = "retrying"
         session.commit()
         record_transition(session, issue, analysis, "retrying")
+        record_retry()
         raise _RetryableWorkflowError(str(exc)) from exc
 
-    recommendation = Recommendation(
-        analysis_id=analysis.id,
-        status=review.recommendation_status,
-        content=_serialize_content(
-            classification, evidence, assessment, proposal, retrieval_result, ai_response, review
-        ),
-    )
-    session.add(recommendation)
-    analysis.attempt_count = attempt_number
-    session.commit()
+    with span("persistence.recommendation"):
+        recommendation = Recommendation(
+            analysis_id=analysis.id,
+            status=review.recommendation_status,
+            content=_serialize_content(
+                classification,
+                evidence,
+                assessment,
+                proposal,
+                retrieval_result,
+                ai_response,
+                review,
+            ),
+        )
+        session.add(recommendation)
+        analysis.attempt_count = attempt_number
+        session.commit()
 
-    analysis.status = "completed"
-    session.commit()
-    record_transition(session, issue, analysis, "completed")
+        analysis.status = "completed"
+        session.commit()
+        record_transition(session, issue, analysis, "completed")
     return analysis
+
+
+def process_workflow_run(session: Session, analysis_id: UUID) -> Analysis:
+    """Restore durable context, then execute one independently visible delivery."""
+    analysis = session.get(Analysis, analysis_id)
+    if analysis is None:
+        raise WorkflowRunNotFoundError(f"Unknown analysis id: {analysis_id}")
+    issue = session.get(Issue, analysis.issue_id)
+    repository = session.get(Repository, issue.repository_id) if issue else None
+    attributes = {"analysis.id": str(analysis.id)}
+    if repository is not None:
+        attributes["organization.id"] = str(repository.tenant_id)
+    started = monotonic()
+    with (
+        correlation_context(analysis.correlation_id),
+        span("workflow.run", traceparent=analysis.traceparent, attributes=attributes),
+    ):
+        logger.info("workflow_delivery_started")
+        result = _process_workflow_run(session, analysis_id)
+        record_workflow(result.status, monotonic() - started)
+        logger.info("workflow_delivery_finished outcome=%s", result.status)
+        return result
 
 
 @celery_app.task(

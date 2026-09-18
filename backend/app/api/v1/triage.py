@@ -24,6 +24,7 @@ from app.models.core import (
     Recommendation,
     StageAttempt,
 )
+from app.observability import current_traceparent, get_correlation_id
 from app.schemas.core import (
     ErrorResponse,
     TriageDecisionRequest,
@@ -109,6 +110,7 @@ def _triage_result_from_analysis(session: Session, analysis: Analysis) -> Triage
 
     return TriageResult(
         analysis_id=analysis.id,
+        correlation_id=analysis.correlation_id,
         issue_id=analysis.issue_id,
         status=analysis.status,
         current_stage=analysis.current_stage,
@@ -212,6 +214,8 @@ def start_issue_triage(
         status="queued",
         idempotency_key=idempotency_key,
         initiating_actor_id=actor.id,
+        correlation_id=get_correlation_id(),
+        traceparent=current_traceparent(),
     )
     session.add(analysis)
     try:
@@ -239,6 +243,7 @@ def start_issue_triage(
 def _workflow_started_response(analysis: Analysis) -> TriageStartedResponse:
     return TriageStartedResponse(
         analysis_id=analysis.id,
+        correlation_id=analysis.correlation_id,
         issue_id=analysis.issue_id,
         status=analysis.status,
         poll_url=f"/api/v1/issues/{analysis.issue_id}/triage",

@@ -6,11 +6,21 @@ canonical, durable workflow-state store. See docs/adr/0007.
 """
 
 from celery import Celery
+from celery.signals import worker_process_init
 
 from app.ai_gateway.router import ensure_ai_gateway_configured
 from app.config import get_settings
+from app.observability import configure_observability
 
 settings = get_settings()
+
+
+@worker_process_init.connect
+def _configure_worker_observability(**_kwargs) -> None:
+    # Deferred until a real worker process starts. Importing this module from
+    # the API (to enqueue a task) must not claim the API process as a worker.
+    configure_observability("repotriage-worker", settings.otel_exporter_otlp_endpoint)
+
 
 # Fail startup, not a task: an invalid AI-gateway configuration (e.g.
 # AI_PROVIDER=openai with no API key) must crash the worker/API process

@@ -123,6 +123,7 @@ export type TriageStageAttempt = {
 
 export type TriageResult = {
   analysis_id: string;
+  correlation_id?: string | null;
   issue_id: string;
   status: TriageStatus;
   current_stage: string | null;
@@ -142,6 +143,7 @@ export type TriageResult = {
 
 export type TriageStartedResponse = {
   analysis_id: string;
+  correlation_id?: string | null;
   issue_id: string;
   status: TriageStatus;
   poll_url: string;

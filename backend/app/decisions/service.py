@@ -22,6 +22,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.core import AuditEvent, HumanDecision, Issue, Recommendation
+from app.observability import record_human_decision, span
 
 LOCAL_REVIEWER_ID = UUID("00000000-0000-0000-0000-000000000001")
 
@@ -85,30 +86,33 @@ def record_decision(
             "This recommendation already has a recorded human decision.",
         )
 
-    human_decision = HumanDecision(
-        recommendation_id=recommendation.id,
-        actor_id=actor_id,
-        decision=decision,
-        rationale=rationale,
-    )
-    session.add(human_decision)
-
-    recommendation.status = RECOMMENDATION_STATUS_BY_DECISION[decision]
-
-    session.add(
-        AuditEvent(
-            repository_id=issue.repository_id,
-            issue_id=issue.id,
+    with span("human_decision.persist", attributes={"decision": decision}):
+        human_decision = HumanDecision(
+            recommendation_id=recommendation.id,
             actor_id=actor_id,
-            event_type=DECISION_AUDIT_EVENT_TYPE,
-            metadata_={
-                "recommendation_id": str(recommendation.id),
-                "analysis_id": str(recommendation.analysis_id),
-                "decision": decision,
-            },
+            decision=decision,
+            rationale=rationale,
         )
-    )
+        session.add(human_decision)
 
-    session.commit()
-    session.refresh(human_decision)
-    return human_decision
+        recommendation.status = RECOMMENDATION_STATUS_BY_DECISION[decision]
+
+        session.add(
+            AuditEvent(
+                repository_id=issue.repository_id,
+                issue_id=issue.id,
+                actor_id=actor_id,
+                event_type=DECISION_AUDIT_EVENT_TYPE,
+                metadata_={
+                    "recommendation_id": str(recommendation.id),
+                    "analysis_id": str(recommendation.analysis_id),
+                    "correlation_id": recommendation.analysis.correlation_id,
+                    "decision": decision,
+                },
+            )
+        )
+
+        session.commit()
+        session.refresh(human_decision)
+        record_human_decision(decision)
+        return human_decision

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from app.ai_gateway.contracts import AIRequest, AIResponse
 from app.ai_gateway.router import route_ai_inference
+from app.observability import span
 from app.retrieval.contracts import RetrievedRecord
 from app.triage.rules import Assessment, Classification, EvidenceItem, ProposedAction
 
@@ -34,4 +35,11 @@ def run_ai_inference_stage(
         proposed_action=proposed_action,
         retrieved_context=retrieved_context,
     )
-    return route_ai_inference(request)
+    with span("ai.inference", attributes={"ai.task": AI_INFERENCE_TASK_NAME}) as current_span:
+        response = route_ai_inference(request)
+        current_span.set_attribute("ai.provider", response.provider)
+        current_span.set_attribute("ai.status", response.status)
+        current_span.set_attribute("ai.input_tokens", response.input_tokens)
+        current_span.set_attribute("ai.output_tokens", response.output_tokens)
+        current_span.set_attribute("ai.estimated_cost_usd", response.estimated_cost_usd)
+        return response

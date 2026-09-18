@@ -18,6 +18,7 @@ from tests.db_maintenance import truncate_for_test
 ALEMBIC_INI_PATH = Path(__file__).resolve().parents[1] / "alembic.ini"
 PRE_APPEND_ONLY_REVISION = "20260918_0006"
 APPEND_ONLY_REVISION = "20260919_0007"
+CURRENT_HEAD_REVISION = "20260920_0008"
 DEFAULT_ORGANIZATION_ID = "00000000-0000-0000-0000-000000000101"
 TRUNCATE_DATA = (
     "TRUNCATE audit_events, human_decisions, recommendations, stage_attempts, "
@@ -154,7 +155,7 @@ def test_clean_empty_database_upgrade_reaches_new_head(
         with engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == APPEND_ONLY_REVISION
+                == CURRENT_HEAD_REVISION
             )
             assert (
                 connection.scalar(
@@ -195,14 +196,14 @@ def test_downgrade_refuses_with_history_and_leaves_protection_intact(migration_e
     database_url, config = migration_env
     event_id = _seed_historical_event(database_url)
     with pytest.raises(Exception, match="Refusing to downgrade migration 20260919_0007"):
-        command.downgrade(config, "-1")
+        command.downgrade(config, PRE_APPEND_ONLY_REVISION)
 
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:
         with engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == APPEND_ONLY_REVISION
+                == CURRENT_HEAD_REVISION
             )
             assert (
                 connection.scalar(
@@ -222,7 +223,7 @@ def test_downgrade_refuses_with_history_and_leaves_protection_intact(migration_e
 
 def test_empty_downgrade_restores_pre_0007_mutability_then_reupgrades(migration_env) -> None:
     database_url, config = migration_env
-    command.downgrade(config, "-1")
+    command.downgrade(config, PRE_APPEND_ONLY_REVISION)
     engine = create_engine(database_url, connect_args={"connect_timeout": 3})
     try:
         with engine.connect() as connection:
@@ -250,7 +251,7 @@ def test_empty_downgrade_restores_pre_0007_mutability_then_reupgrades(migration_
         with engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == APPEND_ONLY_REVISION
+                == CURRENT_HEAD_REVISION
             )
     finally:
         engine.dispose()

@@ -27,10 +27,12 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, Header
+from opentelemetry import trace
 from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.models.core import Actor
+from app.observability import span
 
 DEMO_ACTOR_HEADER = "X-Demo-Actor-ID"
 
@@ -76,23 +78,27 @@ def resolve_demo_actor(
     indistinguishable from each other in status code (though not in
     message) so a caller cannot use the response to enumerate valid actor
     ids by trial and error."""
-    if not x_demo_actor_id:
-        raise IdentityError(
-            401, "missing_actor_header", f"The {DEMO_ACTOR_HEADER} header is required."
-        )
+    with span("authorization.resolve_identity"):
+        if not x_demo_actor_id:
+            raise IdentityError(
+                401, "missing_actor_header", f"The {DEMO_ACTOR_HEADER} header is required."
+            )
 
-    try:
-        actor_id = UUID(x_demo_actor_id)
-    except ValueError as exc:
-        raise IdentityError(
-            401, "malformed_actor_id", f"The {DEMO_ACTOR_HEADER} header is not a valid id."
-        ) from exc
+        try:
+            actor_id = UUID(x_demo_actor_id)
+        except ValueError as exc:
+            raise IdentityError(
+                401, "malformed_actor_id", f"The {DEMO_ACTOR_HEADER} header is not a valid id."
+            ) from exc
 
-    actor = session.get(Actor, actor_id)
-    if actor is None or not actor.is_enabled:
-        raise IdentityError(401, "unknown_actor", "This actor is unknown or disabled.")
+        actor = session.get(Actor, actor_id)
+        if actor is None or not actor.is_enabled:
+            raise IdentityError(401, "unknown_actor", "This actor is unknown or disabled.")
 
-    return AuthenticatedActor(actor)
+        current_span = trace.get_current_span()
+        current_span.set_attribute("organization.id", str(actor.organization_id))
+        current_span.set_attribute("actor.role", actor.role)
+        return AuthenticatedActor(actor)
 
 
 CurrentActor = Annotated[AuthenticatedActor, Depends(resolve_demo_actor)]
@@ -107,12 +113,13 @@ def require_role(*roles: str):
     cross-tenant resource (see `app.api.scoping`)."""
 
     def _dependency(actor: CurrentActor) -> AuthenticatedActor:
-        if not actor.has_role(*roles):
-            raise IdentityError(
-                403,
-                "insufficient_role",
-                "This actor's role does not permit this action.",
-            )
-        return actor
+        with span("authorization.require_role", attributes={"actor.role": actor.role}):
+            if not actor.has_role(*roles):
+                raise IdentityError(
+                    403,
+                    "insufficient_role",
+                    "This actor's role does not permit this action.",
+                )
+            return actor
 
     return _dependency
