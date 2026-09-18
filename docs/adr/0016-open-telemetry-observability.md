@@ -1,6 +1,6 @@
 # ADR 0016: OpenTelemetry observability and durable correlation context
 
-**Status:** Proposed — implemented for Jesse's Milestone 3.3 ownership review
+**Status:** Accepted — approved by Jesse with Milestone 3.3
 **Date:** 2026-09-20
 
 ## Context
@@ -67,5 +67,6 @@ not authenticated production services and not a cloud deployment.
 Focused tests prove correlation generation/validation/response/persistence, API-to-worker parentage,
 required span/metric emission, correlated audit history, prohibited-content exclusion, durable
 retry/resume context, exporter-failure fail-open behavior, and unchanged tenant isolation. The
-diagnostic procedure is in `docs/OBSERVABILITY_RUNBOOK.md`. Milestone 3.3 and G8 remain in progress
-pending Jesse's explicit completion approval and GitHub CI proof.
+diagnostic procedure is in `docs/OBSERVABILITY_RUNBOOK.md`. Jesse approved the isolated ownership
+walkthrough, implementation commit `ce2ebe5dece0cb56ebaadb647c7551d9b74d06d8` passed GitHub CI,
+Milestone 3.3 is complete, and Critical Gate G8 is satisfied.

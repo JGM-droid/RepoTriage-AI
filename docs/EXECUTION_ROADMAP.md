@@ -362,8 +362,7 @@ Capture imports, analyses, workflow transitions, routing decisions, approvals, r
 
 ### Milestone 3.3 — End-to-end observability
 
-**Status:** In progress — implementation, disposable verification, and Jesse's ownership
-walkthrough are complete; explicit completion approval and GitHub CI proof remain pending.
+**Status:** Complete — approved by Jesse. Critical Gate G8 is satisfied.
 
 - Correlation ID from frontend through API, workflow, retrieval, model call, cost, and audit event
 - OpenTelemetry spans and errors
@@ -480,7 +479,7 @@ At the end of every work session, update the Current Project State below. Do not
 ## 11. Current Project State
 
 **Current release:** Release 3 — Enterprise hardening
-**Current milestone:** Milestone 3.3 — End-to-end observability (in progress; approval and CI pending)
+**Current milestone:** Milestone 3.4 — Security hardening (not started)
 **Status:** Release 1 — Product foundation is complete. Milestones 2.1–2.5 are complete (Jesse
 approved all five): a provider-neutral AI gateway with deterministic fallback (ADR 0008);
 repository-grounded pgvector retrieval with a calibrated two-band confidence model, disclosed
@@ -593,9 +592,9 @@ secret patterns; the original imported evidence snapshot remains unredacted by d
 deliberate scope boundary, not an oversight); the retrieval-policy evaluation remains a small,
 frozen sample and retains the accepted #6139 polysemy limitation; rate limiting is IP-keyed and
 fails open if Redis is unavailable. Release 3 remains in progress: Milestone 3.1 multi-tenancy,
-roles, and backend-enforced permissions and Milestone 3.2 append-only auditability are complete;
-observability, security hardening, and containerized cloud delivery remain future Release 3
-milestones.
+roles, and backend-enforced permissions, Milestone 3.2 append-only auditability, and Milestone 3.3
+end-to-end observability are complete; security hardening and containerized cloud delivery remain
+future Release 3 milestones.
 
 Milestone 3.1 — Multi-tenancy and roles, Slice 1 — organization/tenant data-model foundation, is
 complete and Jesse-approved. This slice is a **data-model foundation only**; it does not implement
@@ -720,9 +719,8 @@ and worker images required rebuild/recreation because their running images preda
 0007; PostgreSQL, Redis, frontend, volumes, and live data were not reset or reseeded. Jesse
 approved this evidence and Milestone 3.2 as complete.
 
-Milestone 3.3 implementation, local verification, and Jesse's ownership walkthrough are complete,
-but the milestone remains in progress and Critical Gate G8 is not yet marked complete pending
-explicit approval and GitHub CI proof. [ADR 0016](adr/0016-open-telemetry-observability.md)
+Milestone 3.3 — End-to-end observability is complete and Jesse-approved; Critical Gate G8 is
+satisfied. [ADR 0016](adr/0016-open-telemetry-observability.md)
 adds one OpenTelemetry boundary with validated/generated `X-Correlation-ID`, nullable durable
 `Analysis.correlation_id`/W3C `traceparent` fields in migration `20260920_0008`, linked API/worker
 traces across retry and resume, bounded operational metrics, and JSON logs carrying correlation and
@@ -738,11 +736,15 @@ Final verification against fresh disposable PostgreSQL/Redis passed the complete
 format/lint, a clean upgrade through migration 0008, and the deterministic evaluation baseline
 passed. The frontend full suite passed 30/30, with ESLint and production build clean. Base and demo
 Compose configuration, `git diff --check`, and a Gitleaks scan of all modified/untracked commit
-candidates passed. The isolated ownership walkthrough connected one correlation ID across the API
+candidates passed. Implementation commit `ce2ebe5dece0cb56ebaadb647c7551d9b74d06d8` passed
+[GitHub Actions CI run 35361615260](https://github.com/JGM-droid/RepoTriage-AI/actions/runs/35361615260).
+The isolated ownership walkthrough connected one correlation ID across the API
 response, JSON logs, API-to-worker Jaeger trace, tenant-scoped append-only audit history, and
 Prometheus workflow/stage/retrieval/AI/token/cost metrics. With the disposable Collector stopped,
 a second analysis still completed and persisted its audit evidence; the Collector was restored and
-its Prometheus target returned healthy. The live demo remained read-only throughout at migration
+its Prometheus target returned healthy. Telemetry missing during the outage was not replayed after
+restoration, as expected for the documented fail-open design. This exercise used only the isolated
+disposable walkthrough stack. The separate live demo remained read-only throughout at migration
 `20260919_0007`, with unchanged counts, five healthy services, `AI_PROVIDER=mock`,
 `EMBEDDING_PROVIDER=local`, and the verified pre-0007 backup still present outside the repository.
 
@@ -751,8 +753,8 @@ triggers protect ordinary application DML, not an owner/superuser with DDL acces
 deployment-ready design must separate a migration-owner role from a restricted
 application-runtime role before claiming protection against a compromised runtime credential.
 This protection is neither universal nor cryptographic.
-**Next action:** Review and commit the verified Milestone 3.3 changes, push them for GitHub CI, then
-request Jesse's explicit approval before marking Milestone 3.3 or G8 complete.
+**Next action:** Begin Milestone 3.4 — Security hardening with a targeted scope review against
+rubric section G and Critical Gate G5.
 **Blockers:** None identified.
 
 **Ownership follow-up:** Review remaining technical ownership topics when their corresponding components are implemented.

@@ -6,7 +6,7 @@ RepoTriage AI addresses the repeated triage burden created by duplicate, incompl
 
 The planned workflow is `import → classify → retrieve evidence → assess → propose → human review → decision`. Planned capabilities include evidence-backed recommendations, human approval, provider-neutral AI routing, repository-grounded retrieval, evaluation, security guardrails, auditability, observability, and reproducible delivery.
 
-**Current status:** Release 3 — Enterprise hardening / Milestone 3.3 — End-to-end observability is in progress. Implementation, local verification, and Jesse's ownership walkthrough are complete; explicit completion approval and GitHub CI proof remain pending.
+**Current status:** Release 3 — Enterprise hardening / Milestone 3.4 — Security hardening is next. Milestone 3.3 — End-to-end observability is complete and Jesse-approved; Release 3 remains in progress.
 
 ## Local Setup
 
